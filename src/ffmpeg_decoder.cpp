@@ -31,7 +31,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelF
 
 class H264DecoderNode : public rclcpp::Node {
 private:
-    AVCodec* codec_ = nullptr;
+    const AVCodec* codec_ = nullptr;
     AVCodecContext* codec_ctx_ = nullptr;
     AVCodecParserContext* parser_ctx_ = nullptr;
     AVPacket* pkt_ = nullptr;
