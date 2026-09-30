@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 project(insta360_ros_driver)
 
+enable_language(CUDA)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -18,6 +20,7 @@ find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 pkg_check_modules(AVCODEC REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL REQUIRED libavutil)
@@ -82,6 +85,11 @@ ament_target_dependencies(equirectangular_cpp
   OpenCV
 )
 add_executable(perspective_cpp src/perspective.cpp)
+target_sources(perspective_cpp PRIVATE src/perspective_kernels.cu)
+set_target_properties(perspective_cpp PROPERTIES
+  CUDA_STANDARD 14
+  CUDA_STANDARD_REQUIRED ON
+)
 ament_target_dependencies(perspective_cpp
   rclcpp
   cv_bridge
@@ -90,7 +98,7 @@ ament_target_dependencies(perspective_cpp
   geometry_msgs
 )
 target_link_libraries(equirectangular_cpp ${OpenCV_LIBRARIES})
-target_link_libraries(perspective_cpp ${OpenCV_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(perspective_cpp ${OpenCV_LIBRARIES} Eigen3::Eigen CUDA::cudart)
 
 install(TARGETS equirectangular_cpp perspective_cpp
   DESTINATION lib/${PROJECT_NAME}

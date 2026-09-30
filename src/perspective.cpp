@@ -4,6 +4,7 @@
 #include <numeric>
 #include <thread>
 #include <chrono>
+#include <cuda_runtime.h>
 
 PerspectiveNode::PerspectiveNode()
     : Node("perspective_node"),
@@ -51,11 +52,16 @@ PerspectiveNode::PerspectiveNode()
             tf2::fromMsg(*msg, camera_orientation_quaternion_);
 
             tf2::Matrix3x3 matrix(camera_orientation_quaternion_);
-            
-            camera_orientation_matrix_ = cv::Matx33d(
-            matrix[0][0], matrix[0][1], matrix[0][2],
-            matrix[1][0], matrix[1][1], matrix[1][2],
-            matrix[2][0], matrix[2][1], matrix[2][2]);
+            camera_orientation_matrix_ = cv::Matx33f(
+                    matrix[0][0], matrix[0][1], matrix[0][2],
+                    matrix[1][0], matrix[1][1], matrix[1][2],
+                    matrix[2][0], matrix[2][1], matrix[2][2]);
+            if (gpu_enabled_) {
+                if (d_camera_orientation_matrix_ == nullptr) {
+                    cudaMalloc(&d_camera_orientation_matrix_, 9 * sizeof(float));
+                }
+                cudaMemcpy(d_camera_orientation_matrix_, camera_orientation_matrix_.val, 9 * sizeof(float), cudaMemcpyHostToDevice);
+            } 
             new_orientation_ = true;
         });
     
@@ -65,6 +71,9 @@ PerspectiveNode::PerspectiveNode()
 
 PerspectiveNode::~PerspectiveNode()
 {
+    if (d_camera_orientation_matrix_ != nullptr) cudaFree(d_camera_orientation_matrix_);
+    if (d_back_to_front_rotation_ != nullptr) cudaFree(d_back_to_front_rotation_);
+    if (d_back_to_front_translation_ != nullptr) cudaFree(d_back_to_front_translation_);
 }
 
 void PerspectiveNode::loadParameters()
@@ -110,33 +119,134 @@ void PerspectiveNode::loadParameters()
 void PerspectiveNode::updateCameraParameters()
 {
     // Build rotation matrix
-    cv::Matx33d Rx(
-        1.0, 0.0, 0.0,
-        0.0, cos(roll_), -sin(roll_),
-        0.0, sin(roll_), cos(roll_)
+    cv::Matx33f Rx(
+        1.0f, 0.0f, 0.0f,
+        0.0f, cos(roll_), -sin(roll_),
+        0.0f, sin(roll_), cos(roll_)
     );
     
-    cv::Matx33d Ry(
+    cv::Matx33f Ry(
         cos(pitch_), 0.0, sin(pitch_),
         0.0, 1.0, 0.0,
         -sin(pitch_), 0.0, cos(pitch_)
     );
     
-    cv::Matx33d Rz(
+    cv::Matx33f Rz(
         cos(yaw_), -sin(yaw_), 0.0,
         sin(yaw_), cos(yaw_), 0.0,
         0.0, 0.0, 1.0
     );
-    
+
     back_to_front_rotation_ = Rz * Ry * Rx;
+    back_to_front_translation_ = cv::Vec3f(tx_, ty_, tz_);
     RotationMatrix rot_eigen(back_to_front_rotation_.val);
     rot_eigen.row(0) *= -1.0;
-    back_to_front_translation_ = cv::Vec3d(tx_, ty_, tz_);
+    if (gpu_enabled_) {
+        if (d_back_to_front_rotation_ == nullptr) {
+            cudaMalloc(&d_back_to_front_rotation_, 9 * sizeof(float));
+        }
+        if (d_back_to_front_translation_ == nullptr) {
+            cudaMalloc(&d_back_to_front_translation_, 3 * sizeof(float));
+        }
+
+        cudaMemcpy(d_back_to_front_rotation_, rot_eigen.ptr<float>(), 9 * sizeof(float), cudaMemcpyHostToDevice);
+        
+        cudaMemcpy(d_back_to_front_translation_, back_to_front_translation_.val, 3 * sizeof(float), cudaMemcpyHostToDevice);
+    }
     
     if (maps_initialized_) {
         maps_initialized_ = false;
         RCLCPP_INFO(get_logger(), "Parameters updated, remapping will occur on next image");
     }
+}
+
+void PerspectiveNode::initMappingGPU(int img_height, int img_width)
+{
+    RCLCPP_INFO(get_logger(), "Initializing GPU perspective projection: fusing two %dx%d fisheye images to %dx%d",
+                img_width, img_height, out_width_, out_height_);
+
+    img_height_ = img_height;
+    img_width_ = img_width;
+
+    int current_crop_size = crop_size_;
+    int y_offset_crop = 0;
+    int x_offset_crop = 0;
+    if (img_height_ != current_crop_size || img_width_ != current_crop_size) {
+        int y_start = (img_height_ - current_crop_size) / 2;
+        int x_start = (img_width_ - current_crop_size) / 2;
+
+        if (y_start >= 0 && x_start >= 0 &&
+            y_start + current_crop_size <= img_height_ &&
+            x_start + current_crop_size <= img_width_) {
+            img_height = current_crop_size;
+            img_width = current_crop_size;
+            y_offset_crop = (img_height_ - crop_size_) / 2;
+            x_offset_crop = (img_width_ - crop_size_) / 2;
+        }
+    }
+
+    cx_ = img_width / 2.0f + cx_offset_;
+    cy_ = img_height / 2.0f + cy_offset_;
+
+    if (d_camera_orientation_matrix_ == nullptr) {
+        cudaMalloc(&d_camera_orientation_matrix_, 9 * sizeof(float));
+        const float identity[9] = {1.0f, 0.0f, 0.0f,
+                                   0.0f, 1.0f, 0.0f,
+                                   0.0f, 0.0f, 1.0f};
+        cudaMemcpy(d_camera_orientation_matrix_, identity, 9 * sizeof(float), cudaMemcpyHostToDevice);
+    }
+
+    gpu_x_range.create(1, out_width_, CV_32F);
+    gpu_y_range.create(out_height_, 1, CV_32F);
+    perspective_generate_range_kernel(gpu_x_range.ptr<float>(), out_width_);
+    perspective_generate_range_kernel(gpu_y_range.ptr<float>(), out_height_);
+
+    gpu_x_grid.create(out_height_, out_width_, CV_32F);
+    gpu_y_grid.create(out_height_, out_width_, CV_32F);
+    cv::cuda::repeat(gpu_x_range, out_height_, 1, gpu_x_grid);
+    cv::cuda::repeat(gpu_y_range, 1, out_width_, gpu_y_grid);
+
+    gpu_full_map_x_.create(out_height_, out_width_, CV_32F);
+    gpu_full_map_y_.create(out_height_, out_width_, CV_32F);
+
+    gpu_X.create(out_height_, out_width_, CV_32F);
+    gpu_Y.create(out_height_, out_width_, CV_32F);
+    gpu_Z.create(out_height_, out_width_, CV_32F);
+    gpu_back_mask.create(out_height_, out_width_, CV_8U);
+    gpu_r_array.create(out_height_, out_width_, CV_32F);
+    gpu_r_fisheye_array.create(out_height_, out_width_, CV_32F);
+    gpu_u_array.create(out_height_, out_width_, CV_32F);
+    gpu_v_array.create(out_height_, out_width_, CV_32F);
+    gpu_rot_u_array.create(out_height_, out_width_, CV_32F);
+    gpu_rot_v_array.create(out_height_, out_width_, CV_32F);
+    gpu_opencv_coordinates.create(out_height_, out_width_, CV_32FC3);
+
+    float tan_horizontal = tan(horizontal_fov_ / 2.0f * M_PI / 180.0f);
+    float tan_vertical = tan(vertical_fov_ / 2.0f * M_PI / 180.0f);
+
+    perspective_compute_maps_kernel(
+        gpu_x_grid.ptr<float>(),
+        gpu_y_grid.ptr<float>(),
+        gpu_full_map_x_.ptr<float>(),
+        gpu_full_map_y_.ptr<float>(),
+        out_height_,
+        out_width_,
+        img_height,
+        img_width,
+        cx_,
+        cy_,
+        tan_horizontal,
+        tan_vertical,
+        d_camera_orientation_matrix_,
+        d_back_to_front_rotation_,
+        d_back_to_front_translation_,
+        x_offset_crop,
+        y_offset_crop);
+
+    maps_initialized_ = true;
+    new_orientation_ = false;
+
+    RCLCPP_INFO(get_logger(), "GPU mapping matrices initialization complete");
 }
 
 void PerspectiveNode::initMapping(int img_height, int img_width)
@@ -270,12 +380,23 @@ void PerspectiveNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr dua
         if (!maps_initialized_ || params_changed_ || new_orientation_ ||
                 rows_size != img_height_ || cols_size != img_width_) {
                 // Pass the full raw image dimensions
-                initMapping(rows_size, cols_size);
+                if (gpu_enabled_) {
+                    initMappingGPU(rows_size, cols_size);
+                } else {
+                    initMapping(rows_size, cols_size);
+                }
                 params_changed_ = false;
             }
         auto start_time = now();
         // 3. Single Remap (Directly from Raw to Perspective)
-        cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
+        if (gpu_enabled_) {
+            
+            gpu_input.upload(cv_ptr->image);
+            cv::cuda::remap(gpu_input, gpu_output, gpu_full_map_x_, gpu_full_map_y_, cv::INTER_LINEAR);
+            gpu_output.download(perspective_img);
+        } else {
+            cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
+        }
         
 
         

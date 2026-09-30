@@ -6,6 +6,8 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudawarping.hpp>
 #include <Eigen/Dense>
 #include <memory>
 #include <mutex>
@@ -22,6 +24,27 @@ typedef Eigen::Map<Eigen::Matrix<float, 3, 3, Eigen::RowMajor>> RotationMatrix;
 typedef Eigen::Map<Eigen::Vector3f> XYZ_Vector;
 typedef Eigen::Map<Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>,0,Eigen::Stride<Eigen::Dynamic, 3>> CoordinateView;
 typedef Eigen::Stride<Eigen::Dynamic, 3> Stride3;
+
+extern "C" void perspective_generate_range_kernel(float* out, int size);
+extern "C" void perspective_compute_maps_kernel(
+    const float* x_grid,
+    const float* y_grid,
+    float* full_map_x,
+    float* full_map_y,
+    int out_height,
+    int out_width,
+    int img_height,
+    int img_width,
+    float cx,
+    float cy,
+    float tan_horizontal,
+    float tan_vertical,
+    const float* camera_orientation_matrix,
+    const float* back_to_front_rotation,
+    const float* back_to_front_translation,
+    int x_offset_crop,
+    int y_offset_crop);
+
 class PerspectiveNode : public rclcpp::Node
 {
 public:
@@ -37,6 +60,7 @@ private:
     void loadParameters();
     void updateCameraParameters();
     void initMapping(int img_height, int img_width);
+    void initMappingGPU(int img_height, int img_width);
     
     // Processing functions
     cv::Mat createPerspective(const cv::Mat& front_img, const cv::Mat& back_img);
@@ -82,6 +106,25 @@ private:
     Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic> r_array_, r_fisheye_array_;
     Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic> u_array_, v_array_;
     Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic> rot_u_array_, rot_v_array_;
+
+    
+    // GPU twins
+    cv::cuda::GpuMat gpu_full_map_x_;
+    cv::cuda::GpuMat gpu_full_map_y_;
+    cv::cuda::GpuMat gpu_opencv_coordinates;
+    cv::cuda::GpuMat gpu_x_grid, gpu_y_grid, gpu_x_range, gpu_y_range;
+    cv::cuda::GpuMat gpu_X, gpu_Y, gpu_Z;
+    cv::cuda::GpuMat gpu_back_mask;
+    cv::cuda::GpuMat gpu_r_array, gpu_r_fisheye_array;
+    cv::cuda::GpuMat gpu_u_array, gpu_v_array;
+    cv::cuda::GpuMat gpu_rot_u_array, gpu_rot_v_array;
+    cv::cuda::GpuMat gpu_input;
+    cv::cuda::GpuMat gpu_output;
+
+    // GPU copies of matrix parameters used by initMappingGPU
+    float* d_camera_orientation_matrix_ = nullptr;   // 9 floats
+    float* d_back_to_front_rotation_ = nullptr;      // 9 floats
+    float* d_back_to_front_translation_ = nullptr;   // 3 floats
     /*
     cv::Mat front_map_x_, front_map_y_;
     cv::Mat back_map_x_, back_map_y_;

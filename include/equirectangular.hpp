@@ -8,6 +8,8 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <opencv2/cudawarping.hpp>
+#include <opencv2/core/cuda.hpp>
 
 class EquirectangularNode : public rclcpp::Node
 {
@@ -51,6 +53,7 @@ private:
     // Mapping matrices
     cv::Mat full_map_x_;
     cv::Mat full_map_y_;
+    cv::cuda::GpuMat gpu_input, gpu_map_x, gpu_map_y, gpu_output;
     // Images
     cv::Mat equirect_img;
     // init mapping matrices

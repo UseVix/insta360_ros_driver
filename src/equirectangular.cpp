@@ -148,10 +148,10 @@ void EquirectangularNode::initMapping(int img_height, int img_width)
     y_range = cv::Mat::zeros(out_height_, 1, CV_32F);
     
     for (int i = 0; i < out_width_; ++i) {
-        x_range.at<float>(0, i) = static_cast<float>(i);
+        x_range.at<float>(0, i) = i;
     }
     for (int i = 0; i < out_height_; ++i) {
-        y_range.at<float>(i, 0) = static_cast<float>(i);
+        y_range.at<float>(i, 0) = i;
     }
     
     cv::repeat(x_range, out_height_, 1, x_grid);
@@ -275,7 +275,10 @@ void EquirectangularNode::initMapping(int img_height, int img_width)
         }
     }
     
-   
+   if (gpu_enabled_) {
+    gpu_map_x.upload(full_map_x_);
+    gpu_map_y.upload(full_map_y_);
+   }
 
     maps_initialized_ = true;
     
@@ -298,8 +301,13 @@ void EquirectangularNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr
             }
         auto start_time = now();
         // 3. Single Remap (Directly from Raw to Equirectangular)
+        if(gpu_enabled_) {
+            gpu_input.upload(cv_ptr->image);
+            cv::cuda::remap(gpu_input, gpu_output, gpu_map_x, gpu_map_y, cv::INTER_LINEAR);
+            gpu_output.download(equirect_img);
+        } else {
         cv::remap(cv_ptr->image, equirect_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
-        
+        }
         
         //cv::Mat equirect_img = createEquirectangular(front_img, back_img);
         
