@@ -8,8 +8,12 @@
     <arg name="dual_fisheye2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2perspective.yaml"/>
     <arg name="equirectangular2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular2perspective.yaml"/>
     <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
-    <!-- Publishes Compressed Images -->
+    <!-- Publishes Compressed Stream Data -->
     <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
+
+    <!-- Unwraps sensor_msgs/CompressedImage from CameraCompressedStreamData for decoder -->
+    <node pkg="topic_tools" exec="transform" name="stream_data_unwrapper" output="log"
+          args="/dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage m.data" />
 
     <!-- Decodes Compressed Images -->
     <node pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="log">

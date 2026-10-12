@@ -1,6 +1,6 @@
 media_sdk_stitcher:
   ros__parameters:
-    input_video_topic: /dual_fisheye/image/compressed
+    input_video_topic: /dual_fisheye/image/compressed_stream
     input_imu_topic: /imu/data_raw
     output_topic: /equirectangular/image
     output_width: 1920

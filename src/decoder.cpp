@@ -48,8 +48,13 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr subscription_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
 
+    struct QueuedFrame {
+        cv::Mat image;
+        std_msgs::msg::Header header;
+    };
+
     std::thread publisher_thread_;
-    std::queue<cv::Mat> frame_publish_queue_;
+    std::queue<QueuedFrame> frame_publish_queue_;
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::atomic<bool> stop_publisher_thread_{false};
@@ -135,7 +140,7 @@ private:
 
     void PublisherThreadLoop() {
         while (!stop_publisher_thread_) {
-            cv::Mat frame_to_publish;
+            QueuedFrame frame_to_publish;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
                 queue_cv_.wait(lock, [this] {
@@ -152,19 +157,16 @@ private:
                 frame_publish_queue_.pop();
             }
 
-            if (!frame_to_publish.empty() && publisher_) {
+            if (!frame_to_publish.image.empty() && publisher_) {
                 auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
-                std_msgs::msg::Header header;
-                header.stamp = this->get_clock()->now();
-                header.frame_id = "camera_frame";
-                cv_bridge::CvImage cv_image(header, sensor_msgs::image_encodings::BGR8, frame_to_publish);
+                cv_bridge::CvImage cv_image(frame_to_publish.header, sensor_msgs::image_encodings::BGR8, frame_to_publish.image);
                 cv_image.toImageMsg(*img_msg);
                 publisher_->publish(std::move(img_msg));
             }
         }
     }
 
-    void DecodeAndDisplayPacket(AVPacket* packet) {
+    void DecodeAndDisplayPacket(AVPacket* packet, const std_msgs::msg::Header& header) {
         int ret = avcodec_send_packet(codec_ctx_, packet);
         if (ret < 0) {
             return;
@@ -224,7 +226,7 @@ private:
                     {
                         std::lock_guard<std::mutex> lock(queue_mutex_);
                         if (frame_publish_queue_.size() < max_queue_size_) {
-                            frame_publish_queue_.push(frame_copy);
+                            frame_publish_queue_.push({frame_copy, header});
                         }
                     }
                     queue_cv_.notify_one();
@@ -273,6 +275,8 @@ private:
 
     void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
         if (msg->format != "h264") {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "H264DecoderNode: received format '%s', but only 'h264' is supported", msg->format.c_str());
             return;
         }
 
@@ -300,10 +304,10 @@ private:
                     // Parse NAL unit type from H.264 stream
                     // The parser sets keyframe flag for I-frames
                     if (parser_ctx_->key_frame == 1) {
-                        DecodeAndDisplayPacket(pkt_);
+                        DecodeAndDisplayPacket(pkt_, msg->header);
                     }
                 } else {
-                    DecodeAndDisplayPacket(pkt_);
+                    DecodeAndDisplayPacket(pkt_, msg->header);
                 }
             }
         }

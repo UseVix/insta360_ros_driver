@@ -13,24 +13,32 @@
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "insta360_ros_driver/msg/camera_preview_info.hpp"
+#include "insta360_ros_driver/msg/exposure_data.hpp"
+#include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
 class TestStreamDelegate : public ins_camera::StreamDelegate {
 private:
     std::shared_ptr<rclcpp::Node> node_;
-    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
+    rclcpp::Publisher<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr stream_data_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+    rclcpp::Publisher<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_pub_;
+    std::string video_format_;
 
 public:
-    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node) : node_(node) {
-        // Publisher for the compressed H.264 video stream
-        compressed_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
-            "/dual_fisheye/image/compressed", 
-            rclcpp::SensorDataQoS()
+    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264")
+        : node_(node), video_format_(video_format) {
+        // Publisher for custom CameraCompressedStreamData including stream_type and stream_index
+        stream_data_pub_ = node_->create_publisher<insta360_ros_driver::msg::CameraCompressedStreamData>(
+            "/dual_fisheye/image/compressed_stream", 
+            rclcpp::QoS(10)
         );
 
-        // Publisher for IMU data (remains the same)
+        // Publisher for IMU data
         imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
-        RCLCPP_INFO(node_->get_logger(), "Publisher for compressed images and IMU created.");
+        
+        // Publisher for exposure data
+        exposure_pub_ = node_->create_publisher<insta360_ros_driver::msg::ExposureData>("/camera/exposure_data", rclcpp::SystemDefaultsQoS());
+        RCLCPP_INFO(node_->get_logger(), "Publisher for compressed stream data (%s) and IMU created.", video_format_.c_str());
     }
 
     virtual ~TestStreamDelegate() {}
@@ -38,32 +46,33 @@ public:
     void OnAudioData(const uint8_t* data, size_t size, int64_t timestamp) override {}
 
     void OnVideoData(const uint8_t* data, size_t size, int64_t timestamp, uint8_t streamType, int stream_index) override {
-        // We only care about the main video stream (index 0)
-        if (stream_index == 0 && size > 0 && compressed_pub_) {
-            auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
-
-            // Set the header
-            msg->header.stamp = node_->get_clock()->now();
-            msg->header.frame_id = "camera_frame";
-
-            // Set the format to H.264
-            // The subscriber will need to know this to select the correct decoder.
-            msg->format = "h264";
-
-            // Copy the compressed video data directly into the message
-            msg->data.assign(data, data + size);
-
-            compressed_pub_->publish(std::move(msg));
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "OnVideoData ts=%ld, streamType=%d, streamIndex=%d", timestamp, streamType, stream_index);
+        
+        if (size > 0) {
+            // Publish custom message with explicit stream_type and stream_index
+            if (stream_data_pub_) {
+                auto stream_msg = std::make_unique<insta360_ros_driver::msg::CameraCompressedStreamData>();
+                stream_msg->stream_type = streamType;
+                stream_msg->stream_index = stream_index;
+                stream_msg->data.header.stamp.sec = timestamp / 1000;
+                stream_msg->data.header.stamp.nanosec = (timestamp % 1000) * 1000000;
+                stream_msg->data.header.frame_id = "camera_frame";
+                stream_msg->data.format = video_format_;
+                stream_msg->data.data.assign(data, data + size);
+                stream_data_pub_->publish(std::move(stream_msg));
+            }
         }
     }
 
     void OnGyroData(const std::vector<ins_camera::GyroData>& data) override {
         for (const auto& gyro : data) {
             auto msg = std::make_unique<sensor_msgs::msg::Imu>();
-            msg->header.stamp = node_->get_clock()->now();
+            msg->header.stamp.sec = gyro.timestamp / 1000;
+            msg->header.stamp.nanosec = (gyro.timestamp % 1000) * 1000000;
             msg->header.frame_id = "imu_frame";
             msg->angular_velocity.x = gyro.gx;
             msg->angular_velocity.y = gyro.gy;
+            RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "OnGyroData ts=%ld", gyro.timestamp);
             msg->angular_velocity.z = gyro.gz;
             
             msg->linear_acceleration.x = gyro.ax * 9.80665;
@@ -85,7 +94,14 @@ public:
         }
     }
 
-    void OnExposureData(const ins_camera::ExposureData& data) override {}
+    void OnExposureData(const ins_camera::ExposureData& data) override {
+        if (exposure_pub_) {
+            auto msg = std::make_unique<insta360_ros_driver::msg::ExposureData>();
+            msg->timestamp = data.timestamp;
+            msg->exposure_time = data.exposure_time;
+            exposure_pub_->publish(std::move(msg));
+        }
+    }
 };
 
 class CameraWrapper {
@@ -99,6 +115,7 @@ public:
 
     ~CameraWrapper() {
         if (cam) {
+            cam->StopLiveStreaming();
             cam->Close();
         }
     }
@@ -138,11 +155,14 @@ public:
         metadata->crop_offset_x = preview.crop_info.crop_offset_x;
         metadata->crop_offset_y = preview.crop_info.crop_offset_y;
         metadata->camera_offset = preview.offset;
+        metadata->delay_timestamp = preview.delay_timestamp;
+        metadata->sweep_time = preview.sweep_time;
         metadata_pub_->publish(std::move(metadata));
         RCLCPP_INFO(node_->get_logger(), "Published camera preview metadata for %s", preview.camera_name.c_str());
         discovery.FreeDeviceDescriptors(list);
 
-        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_);
+        std::string video_format = preview.encode_type == ins_camera::VideoEncodeType::H265 ? "h265" : "h264";
+        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_, video_format);
         cam->SetStreamDelegate(delegate);
 
         auto start = time(NULL);
@@ -162,6 +182,10 @@ public:
         param.video_bitrate = 1024 * 1024 / 2;
         param.enable_audio = false;
         param.using_lrv = false;
+
+        cam->StopLiveStreaming();
+        RCLCPP_INFO(node_->get_logger(), "Stopped residual live streaming. Waiting 5 seconds for stitcher to subscribe...");
+        rclcpp::sleep_for(std::chrono::seconds(5));
 
         if (!cam->StartLiveStreaming(param)) {
             RCLCPP_ERROR(node_->get_logger(), "Failed to start live streaming.");

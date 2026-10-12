@@ -8,3 +8,5 @@ uint32 crop_dst_height
 int32 crop_offset_x
 int32 crop_offset_y
 string[] camera_offset
+int64 delay_timestamp
+int64 sweep_time

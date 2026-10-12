@@ -67,7 +67,9 @@ find_library(MEDIA_SDK_LIBRARY MediaSDK
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraPreviewInfo.msg"
-  DEPENDENCIES std_msgs
+  "msg/ExposureData.msg"
+  "msg/CameraCompressedStreamData.msg"
+  DEPENDENCIES std_msgs sensor_msgs
 )
 pkg_check_modules(AVCODEC REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)

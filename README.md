@@ -62,12 +62,48 @@ sudo chmod 777 /dev/insta
 ```
 
 ## Usage
-The camera provides images natively in H264 compressed image format. We have a decoder node that 
+The camera provides compressed video streams (H.264 / H.265) wrapped inside the custom message type `insta360_ros_driver/msg/CameraCompressedStreamData` on `/dual_fisheye/image/compressed_stream`. This bundles the raw encoded packet (`sensor_msgs/msg/CompressedImage data`) alongside the camera's `stream_type` and `stream_index`.
+
+### Image Stream Unwrapping & Decoding
+Standard ROS tools and the decoder node (`ffmpeg_decoder`) expect standard `sensor_msgs/msg/CompressedImage` messages. You can unwrap the embedded `data` field from the custom stream topic to `/dual_fisheye/image/compressed` using `topic_tools transform` without writing any new code:
+
+**1. Command Line:**
+```bash
+ros2 run topic_tools transform /dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage 'm.data'
+```
+
+**2. In a Python Launch File:**
+```python
+from launch_ros.actions import Node
+
+Node(
+    package='topic_tools',
+    executable='transform',
+    name='stream_data_unwrapper',
+    arguments=[
+        '/dual_fisheye/image/compressed_stream',
+        '/dual_fisheye/image/compressed',
+        'sensor_msgs/msg/CompressedImage',
+        'm.data'
+    ],
+    output='screen'
+)
+```
+
+**3. In an XML Launch File:**
+```xml
+<node pkg="topic_tools" exec="transform" name="stream_data_unwrapper" output="log"
+      args="/dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage m.data" />
+```
 
 ### Camera Bringup
-The camera can be brought up with the following launch file
-```
+The camera can be brought up with the following launch file (which includes the unwrapper, decoder, and stitcher):
+```bash
 ros2 launch insta360_ros_driver bringup.launch.xml
+```
+or via the Python pipeline:
+```bash
+ros2 launch insta360_ros_driver working_pipeline.launch.py
 ```
 ![bringup](docs/bringup_rqt.png)
 
@@ -76,11 +112,14 @@ A dual fisheye image will be published.
 ![dual_fisheye](docs/dual_fisheye.png)
 
 #### Published Topics
-- /dual_fisheye/image
-- /dual_fisheye/image/compressed
-- /equirectangular/image
-- /imu/data
-- /imu/data_raw
+- `/dual_fisheye/image/compressed_stream` (`insta360_ros_driver/msg/CameraCompressedStreamData`): Camera stream data with stream type and index.
+- `/dual_fisheye/image/compressed` (`sensor_msgs/msg/CompressedImage`): Unwrapped compressed video stream (via `stream_data_unwrapper`).
+- `/dual_fisheye/image` (`sensor_msgs/msg/Image`): Uncompressed dual-fisheye frames (via `ffmpeg_decoder`).
+- `/equirectangular/image` (`sensor_msgs/msg/Image`): Stitched 360° equirectangular image.
+- `/camera/exposure_data` (`insta360_ros_driver/msg/ExposureData`): Camera exposure telemetry.
+- `/insta360/camera_preview_info` (`insta360_ros_driver/msg/CameraPreviewInfo`): Camera calibration parameters, crop offsets, delay, and sweep times.
+- `/imu/data_raw` (`sensor_msgs/msg/Imu`): Raw 6-DOF IMU data (angular velocity and linear acceleration).
+- `/imu/data` (`sensor_msgs/msg/Imu`): Filtered orientation IMU data (via `imu_filter_madgwick`).
 
 #### MediaSDK Realtime Stitching
 
