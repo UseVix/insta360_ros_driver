@@ -6,11 +6,19 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <stdexcept>
+#include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
 class GstreamerDecoderNode : public rclcpp::Node {
 public:
     GstreamerDecoderNode() : Node("gstreamer_decoder") {
-        declare_parameter("compressed_topic", "/dual_fisheye/image/compressed");
+        declare_parameter("use_custom_stream_msg", false);
+        bool use_custom_stream_msg = get_parameter("use_custom_stream_msg").as_bool();
+
+        std::string default_topic = use_custom_stream_msg ?
+            "/dual_fisheye/image/compressed_stream" :
+            "/dual_fisheye/image/compressed";
+
+        declare_parameter("compressed_topic", default_topic);
         declare_parameter("image_topic", "/dual_fisheye/image");
         declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
         topic_ = get_parameter("compressed_topic").as_string();
@@ -29,7 +37,21 @@ public:
         gst_app_sink_set_max_buffers(sink_, 1);
         gst_element_set_state(pipeline_, GST_STATE_PLAYING);
         publisher_ = create_publisher<sensor_msgs::msg::Image>(image_topic_, rclcpp::SensorDataQoS());
-        subscription_ = create_subscription<sensor_msgs::msg::CompressedImage>(topic_, rclcpp::SensorDataQoS(), std::bind(&GstreamerDecoderNode::callback, this, std::placeholders::_1));
+
+        if (use_custom_stream_msg) {
+            custom_subscription_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
+                topic_, rclcpp::SensorDataQoS(),
+                std::bind(&GstreamerDecoderNode::custom_stream_callback, this, std::placeholders::_1));
+        } else {
+            subscription_ = create_subscription<sensor_msgs::msg::CompressedImage>(
+                topic_, rclcpp::SensorDataQoS(),
+                std::bind(&GstreamerDecoderNode::compressed_image_callback, this, std::placeholders::_1));
+        }
+
+        RCLCPP_INFO(get_logger(), "GStreamer Decoder Node initialized");
+        RCLCPP_INFO(get_logger(), "Using custom stream message: %s", use_custom_stream_msg ? "true" : "false");
+        RCLCPP_INFO(get_logger(), "Subscribing to: %s", topic_.c_str());
+        RCLCPP_INFO(get_logger(), "Publishing to: %s", image_topic_.c_str());
     }
     ~GstreamerDecoderNode() override {
         if (pipeline_) gst_element_set_state(pipeline_, GST_STATE_NULL);
@@ -38,10 +60,10 @@ public:
         if (pipeline_) gst_object_unref(pipeline_);
     }
 private:
-    void callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
-        if (msg->format != "h264") return;
-        GstBuffer *buffer = gst_buffer_new_allocate(nullptr, msg->data.size(), nullptr);
-        gst_buffer_fill(buffer, 0, msg->data.data(), msg->data.size());
+    void decode_frame(const sensor_msgs::msg::CompressedImage& msg) {
+        if (msg.format != "h264") return;
+        GstBuffer *buffer = gst_buffer_new_allocate(nullptr, msg.data.size(), nullptr);
+        gst_buffer_fill(buffer, 0, msg.data.data(), msg.data.size());
         if (gst_app_src_push_buffer(source_, buffer) != GST_FLOW_OK) return;
         GstSample *sample = gst_app_sink_try_pull_sample(sink_, GST_MSECOND * 100);
         if (!sample) return;
@@ -55,18 +77,28 @@ private:
             gst_structure_get_int(structure, "height", &height);
             if (width > 0 && height > 0 && map.size >= static_cast<size_t>(width * height * 3)) {
                 cv::Mat image(height, width, CV_8UC3, map.data);
-                std_msgs::msg::Header header = msg->header;
+                std_msgs::msg::Header header = msg.header;
                 publisher_->publish(*cv_bridge::CvImage(header, "bgr8", image).toImageMsg());
             }
             gst_buffer_unmap(decoded, &map);
         }
         gst_sample_unref(sample);
     }
+
+    void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+        decode_frame(*msg);
+    }
+
+    void custom_stream_callback(const insta360_ros_driver::msg::CameraCompressedStreamData::SharedPtr msg) {
+        decode_frame(msg->data);
+    }
+
     std::string topic_, image_topic_, pipeline_description_;
     GstElement *pipeline_ = nullptr;
     GstAppSrc *source_ = nullptr;
     GstAppSink *sink_ = nullptr;
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr subscription_;
+    rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr custom_subscription_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
 };
 

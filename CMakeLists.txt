@@ -123,17 +123,20 @@ install(TARGETS ${PROJECT_NAME}_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-add_executable(ffmpeg_decoder src/decoder.cpp)
+add_executable(ffmpeg_decoder src/ffmpeg_decoder.cpp)
 ament_target_dependencies(ffmpeg_decoder
   rclcpp
   camera_info_manager
   cv_bridge
   image_transport
+  sensor_msgs
   std_msgs
   std_srvs
   OpenCV
+  rosidl_default_runtime
 )
 target_link_libraries(ffmpeg_decoder CameraSDK  ${OpenCV_LIBRARIES} ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWSCALE_LIBRARIES})
+target_link_libraries(ffmpeg_decoder "${cpp_typesupport_target}")
 
 install(TARGETS ffmpeg_decoder
   DESTINATION lib/${PROJECT_NAME}
@@ -144,8 +147,9 @@ ament_target_dependencies(gstreamer_encoder rclcpp cv_bridge sensor_msgs std_msg
 target_link_libraries(gstreamer_encoder ${OpenCV_LIBRARIES} ${GSTREAMER_LIBRARIES})
 
 add_executable(gstreamer_decoder src/gstreamer_decoder.cpp)
-ament_target_dependencies(gstreamer_decoder rclcpp cv_bridge sensor_msgs std_msgs OpenCV)
+ament_target_dependencies(gstreamer_decoder rclcpp cv_bridge sensor_msgs std_msgs OpenCV rosidl_default_runtime)
 target_link_libraries(gstreamer_decoder ${GSTREAMER_LIBRARIES})
+target_link_libraries(gstreamer_decoder "${cpp_typesupport_target}")
 
 add_executable(media_sdk_stitcher src/media_sdk_stitcher.cpp)
 ament_target_dependencies(media_sdk_stitcher rclcpp sensor_msgs cv_bridge rosidl_default_runtime)

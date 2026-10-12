@@ -11,13 +11,10 @@
     <!-- Publishes Compressed Stream Data -->
     <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
 
-    <!-- Unwraps sensor_msgs/CompressedImage from CameraCompressedStreamData for decoder -->
-    <node pkg="topic_tools" exec="transform" name="stream_data_unwrapper" output="log"
-          args="/dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage m.data" />
-
-    <!-- Decodes Compressed Images -->
+    <!-- Decodes Compressed Images (directly consumes custom CameraCompressedStreamData) -->
     <node pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="log">
-        <param name="compressed_topic" value="/dual_fisheye/image/compressed"/>
+        <param name="use_custom_stream_msg" value="true"/>
+        <param name="compressed_topic" value="/dual_fisheye/image/compressed_stream"/>
         <param name="uncompressed_topic" value="/dual_fisheye/image"/>
         <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
         <param name="skip_frame" value="0"/>

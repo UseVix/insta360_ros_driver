@@ -14,6 +14,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "cv_bridge/cv_bridge.h"
 #include "sensor_msgs/image_encodings.hpp"
+#include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
 extern "C" {
     #include <libavcodec/avcodec.h>
@@ -46,6 +47,7 @@ private:
     enum AVHWDeviceType hw_type_ = AV_HWDEVICE_TYPE_NONE;
 
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr subscription_;
+    rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr custom_subscription_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
 
     struct QueuedFrame {
@@ -273,10 +275,10 @@ private:
         codec_ = nullptr;
     }
 
-    void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
-        if (msg->format != "h264") {
+    void decode_frame(const sensor_msgs::msg::CompressedImage& msg) {
+        if (msg.format != "h264") {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                                 "H264DecoderNode: received format '%s', but only 'h264' is supported", msg->format.c_str());
+                                 "H264DecoderNode: received format '%s', but only 'h264' is supported", msg.format.c_str());
             return;
         }
 
@@ -284,8 +286,8 @@ private:
             return;
         }
 
-        const uint8_t* cur_data = msg->data.data();
-        size_t remaining_size = msg->data.size();
+        const uint8_t* cur_data = msg.data.data();
+        size_t remaining_size = msg.data.size();
 
         while (remaining_size > 0) {
             int bytes_parsed = av_parser_parse2(parser_ctx_, codec_ctx_,
@@ -304,18 +306,33 @@ private:
                     // Parse NAL unit type from H.264 stream
                     // The parser sets keyframe flag for I-frames
                     if (parser_ctx_->key_frame == 1) {
-                        DecodeAndDisplayPacket(pkt_, msg->header);
+                        DecodeAndDisplayPacket(pkt_, msg.header);
                     }
                 } else {
-                    DecodeAndDisplayPacket(pkt_, msg->header);
+                    DecodeAndDisplayPacket(pkt_, msg.header);
                 }
             }
         }
     }
 
+    void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+        decode_frame(*msg);
+    }
+
+    void custom_stream_callback(const insta360_ros_driver::msg::CameraCompressedStreamData::SharedPtr msg) {
+        decode_frame(msg->data);
+    }
+
 public:
     H264DecoderNode() : Node("h264_decoder_node") {
-        this->declare_parameter("compressed_topic", "/dual_fisheye/image/compressed");
+        this->declare_parameter("use_custom_stream_msg", false);
+        bool use_custom_stream_msg = this->get_parameter("use_custom_stream_msg").as_bool();
+
+        std::string default_topic = use_custom_stream_msg ?
+            "/dual_fisheye/image/compressed_stream" :
+            "/dual_fisheye/image/compressed";
+
+        this->declare_parameter("compressed_topic", default_topic);
         this->declare_parameter("uncompressed_topic", "/dual_fisheye/image");
         this->declare_parameter("skip_frame", 0);
         this->declare_parameter("i_frame_only", false);
@@ -325,9 +342,15 @@ public:
         skip_frame_ = this->get_parameter("skip_frame").as_int();
         i_frame_only_ = this->get_parameter("i_frame_only").as_bool();
 
-        subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
-            subscribe_topic, 10,
-            std::bind(&H264DecoderNode::compressed_image_callback, this, std::placeholders::_1));
+        if (use_custom_stream_msg) {
+            custom_subscription_ = this->create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
+                subscribe_topic, 10,
+                std::bind(&H264DecoderNode::custom_stream_callback, this, std::placeholders::_1));
+        } else {
+            subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+                subscribe_topic, 10,
+                std::bind(&H264DecoderNode::compressed_image_callback, this, std::placeholders::_1));
+        }
 
         publisher_ = this->create_publisher<sensor_msgs::msg::Image>(publish_topic, 10);
 
@@ -336,6 +359,7 @@ public:
         InitFFmpegDecoder();
 
         RCLCPP_INFO(this->get_logger(), "H.264 Decoder Node initialized");
+        RCLCPP_INFO(this->get_logger(), "Using custom stream message: %s", use_custom_stream_msg ? "true" : "false");
         RCLCPP_INFO(this->get_logger(), "Subscribing to: %s", subscribe_topic.c_str());
         RCLCPP_INFO(this->get_logger(), "Publishing to: %s", publish_topic.c_str());
         RCLCPP_INFO(this->get_logger(), "Skip frame: %d, I-frame only: %s", skip_frame_, i_frame_only_ ? "true" : "false");

@@ -64,40 +64,37 @@ sudo chmod 777 /dev/insta
 ## Usage
 The camera provides compressed video streams (H.264 / H.265) wrapped inside the custom message type `insta360_ros_driver/msg/CameraCompressedStreamData` on `/dual_fisheye/image/compressed_stream`. This bundles the raw encoded packet (`sensor_msgs/msg/CompressedImage data`) alongside the camera's `stream_type` and `stream_index`.
 
-### Image Stream Unwrapping & Decoding
-Standard ROS tools and the decoder node (`ffmpeg_decoder`) expect standard `sensor_msgs/msg/CompressedImage` messages. You can unwrap the embedded `data` field from the custom stream topic to `/dual_fisheye/image/compressed` using `topic_tools transform` without writing any new code:
+### Image Stream Decoding (`ffmpeg_decoder` & `gstreamer_decoder`)
+The decoder nodes (`ffmpeg_decoder` and `gstreamer_decoder`) decompress the H.264 video stream into raw BGR images (`sensor_msgs/msg/Image`) on `/dual_fisheye/image`.
 
-**1. Command Line:**
+By default, both decoders subscribe to the standard `sensor_msgs/msg/CompressedImage` topic on `/dual_fisheye/image/compressed`. You can also configure them to directly subscribe to the camera driver's custom stream message type:
+- **`use_custom_stream_msg`** (`bool`, default: `false`):
+  - When `false` (default): subscribes to standard `sensor_msgs/msg/CompressedImage` on `compressed_topic` (default: `/dual_fisheye/image/compressed`).
+  - When `true`: subscribes to `insta360_ros_driver/msg/CameraCompressedStreamData` on `compressed_topic` (default: `/dual_fisheye/image/compressed_stream`).
+- **`compressed_topic`** (`string`): The topic to subscribe to. Defaults to `/dual_fisheye/image/compressed` if `use_custom_stream_msg` is `false`, or `/dual_fisheye/image/compressed_stream` if `true`.
+- **`uncompressed_topic`** / **`image_topic`** (`string`, default: `/dual_fisheye/image`): Output topic for decoded images (`uncompressed_topic` in `ffmpeg_decoder`, `image_topic` in `gstreamer_decoder`).
+- **`skip_frame`** (`int`, default: `0`, FFmpeg only): Skip every N frames to reduce downstream compute.
+- **`i_frame_only`** (`bool`, default: `false`, FFmpeg only): Decode keyframes (I-frames) only (~1-2 FPS).
+
+**Example: Running with default settings (subscribing to standard CompressedImage topic):**
 ```bash
-ros2 run topic_tools transform /dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage 'm.data'
+ros2 run insta360_ros_driver ffmpeg_decoder
+# Or using GStreamer:
+ros2 run insta360_ros_driver gstreamer_decoder
 ```
 
-**2. In a Python Launch File:**
-```python
-from launch_ros.actions import Node
+**Example: Running directly against driver's custom stream message:**
+```bash
+ros2 run insta360_ros_driver ffmpeg_decoder --ros-args \
+  -p use_custom_stream_msg:=true
 
-Node(
-    package='topic_tools',
-    executable='transform',
-    name='stream_data_unwrapper',
-    arguments=[
-        '/dual_fisheye/image/compressed_stream',
-        '/dual_fisheye/image/compressed',
-        'sensor_msgs/msg/CompressedImage',
-        'm.data'
-    ],
-    output='screen'
-)
-```
-
-**3. In an XML Launch File:**
-```xml
-<node pkg="topic_tools" exec="transform" name="stream_data_unwrapper" output="log"
-      args="/dual_fisheye/image/compressed_stream /dual_fisheye/image/compressed sensor_msgs/msg/CompressedImage m.data" />
+# Or using GStreamer:
+ros2 run insta360_ros_driver gstreamer_decoder --ros-args \
+  -p use_custom_stream_msg:=true
 ```
 
 ### Camera Bringup
-The camera can be brought up with the following launch file (which includes the unwrapper, decoder, and stitcher):
+The camera can be brought up with the following launch file (which includes the driver, decoder, and stitcher):
 ```bash
 ros2 launch insta360_ros_driver bringup.launch.xml
 ```
@@ -113,7 +110,6 @@ A dual fisheye image will be published.
 
 #### Published Topics
 - `/dual_fisheye/image/compressed_stream` (`insta360_ros_driver/msg/CameraCompressedStreamData`): Camera stream data with stream type and index.
-- `/dual_fisheye/image/compressed` (`sensor_msgs/msg/CompressedImage`): Unwrapped compressed video stream (via `stream_data_unwrapper`).
 - `/dual_fisheye/image` (`sensor_msgs/msg/Image`): Uncompressed dual-fisheye frames (via `ffmpeg_decoder`).
 - `/equirectangular/image` (`sensor_msgs/msg/Image`): Stitched 360° equirectangular image.
 - `/camera/exposure_data` (`insta360_ros_driver/msg/ExposureData`): Camera exposure telemetry.
