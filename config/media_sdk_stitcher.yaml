@@ -6,7 +6,7 @@ media_sdk_stitcher:
     output_width: 1920
     output_height: 960
     stitch_type: dynamicstitch
-    enable_flowstate: false
+    enable_flowstate: true
     enable_direction_lock: false
     enable_deflicker: false
     enable_defringe: false

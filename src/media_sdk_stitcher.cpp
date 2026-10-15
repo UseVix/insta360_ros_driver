@@ -9,12 +9,29 @@
 #include "insta360_ros_driver/msg/exposure_data.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
+#include <geometry_msgs/msg/quaternion_stamped.hpp>
+
 #include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace arvrender {
+struct Quat {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+class SequenceStabilizer {
+public:
+    Quat GetStabilizerQuaternion(double timestamp);
+    Quat GetDirectionalQuaternion(double timestamp);
+};
+}
 
 class MediaSdkStitcherNode : public rclcpp::Node
 {
@@ -28,7 +45,7 @@ public:
         declare_parameter("output_width", 1920);
         declare_parameter("output_height", 960);
         declare_parameter("stitch_type", "dynamicstitch");
-        declare_parameter("enable_flowstate", false);
+        declare_parameter("enable_flowstate", true);
         declare_parameter("enable_direction_lock", false);
         declare_parameter("enable_deflicker", false);
         declare_parameter("enable_defringe", false);
@@ -39,6 +56,8 @@ public:
 
         output_pub_ = create_publisher<sensor_msgs::msg::Image>(
             get_parameter("output_topic").as_string(), rclcpp::SensorDataQoS());
+        orientation_pub_ = create_publisher<geometry_msgs::msg::QuaternionStamped>(
+            "/equirectangular/flowstate_orientation", rclcpp::SensorDataQoS());
         // Use RELIABLE QoS(10) to match publisher and prevent packet drops
         video_sub_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
             get_parameter("input_video_topic").as_string(), rclcpp::QoS(10),
@@ -112,7 +131,12 @@ private:
         stitcher_->SetOutputSize(
             get_parameter("output_width").as_int(),
             get_parameter("output_height").as_int());
-        stitcher_->EnableFlowState(get_parameter("enable_flowstate").as_bool());
+        const bool flowstate = get_parameter("enable_flowstate").as_bool();
+        if (!flowstate) {
+            RCLCPP_WARN(get_logger(),
+                "MediaSDK RealTimeStitcher requires FlowState stabilization enabled to avoid a null stabilizer crash in libMediaSDK. Enforcing FlowState enabled.");
+        }
+        stitcher_->EnableFlowState(true);
         stitcher_->EnableDirectionLock(get_parameter("enable_direction_lock").as_bool());
         stitcher_->EnableDeflicker(get_parameter("enable_deflicker").as_bool());
         stitcher_->EnableDefringe(get_parameter("enable_defringe").as_bool());
@@ -188,6 +212,35 @@ private:
         output.encoding = encoding;
         output.image = image.clone();
         output_pub_->publish(*output.toImageMsg());
+
+        // Extract internal FlowState stabilization quaternion if available
+        if (stitcher_) {
+            void* stitcher_raw = stitcher_.get();
+            void* imp = *reinterpret_cast<void**>(stitcher_raw);
+            if (imp) {
+                auto* stabilizer = *reinterpret_cast<arvrender::SequenceStabilizer**>(
+                    reinterpret_cast<char*>(imp) + 0x260);
+                if (stabilizer) {
+                    try {
+                        auto q = stabilizer->GetStabilizerQuaternion(static_cast<double>(timestamp));
+                        geometry_msgs::msg::QuaternionStamped quat_msg;
+                        quat_msg.header = output.header;
+                        quat_msg.quaternion.x = q.x;
+                        quat_msg.quaternion.y = q.y;
+                        quat_msg.quaternion.z = q.z;
+                        quat_msg.quaternion.w = q.w;
+                        orientation_pub_->publish(quat_msg);
+
+                        RCLCPP_INFO_THROTTLE(
+                            get_logger(), *get_clock(), 2000,
+                            "FlowState orientation at timestamp %ld ms: [x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
+                            timestamp, q.x, q.y, q.z, q.w);
+                    } catch (...) {
+                        // Stabilizer might not have enough samples yet
+                    }
+                }
+            }
+        }
     }
 
     std::shared_ptr<ins::RealTimeStitcher> stitcher_;
@@ -197,6 +250,7 @@ private:
     rclcpp::Subscription<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_sub_;
     rclcpp::Subscription<insta360_ros_driver::msg::CameraPreviewInfo>::SharedPtr metadata_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr output_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr orientation_pub_;
     std::mutex publish_mutex_;
 };
 

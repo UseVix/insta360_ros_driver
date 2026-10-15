@@ -33,7 +33,7 @@ Equirectangular2PerspectiveNode::Equirectangular2PerspectiveNode()
     
     // Create publishers and subscribers
     equirectangular_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "/equirectangular/image", qos,
+        "/equirectangular/image", rclcpp::SensorDataQoS(),
         std::bind(&Equirectangular2PerspectiveNode::imageCallback, this, std::placeholders::_1));
 
     camera_orientation_sub_ = create_subscription<geometry_msgs::msg::Quaternion>(
@@ -129,9 +129,11 @@ void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
     full_map_y_ = cv::Mat::zeros(out_height_, out_width_, CV_32F);
 
     
-    latitude = eigen_Y_coordinate.unaryExpr([](float value) {
-        return std::asin(value);
-    });
+    latitude = eigen_Y_coordinate.binaryExpr(
+        (eigen_X_coordinate.square() + eigen_Z_coordinate.square()).sqrt(),
+        [](float y, float xz) {
+            return std::atan2(y, xz);
+        });
     longitude = eigen_X_coordinate.binaryExpr(
         eigen_Z_coordinate,
         [](float x, float z) {
@@ -140,6 +142,10 @@ void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
 
     Matrix (full_map_x_.ptr<float>(), out_height_, out_width_) = (longitude + M_PI) / (2.0 * M_PI) * img_width;
     Matrix (full_map_y_.ptr<float>(), out_height_, out_width_) = (M_PI / 2.0 - latitude) / M_PI * img_height;
+
+    // Clamp vertical map_y to prevent vertical wrap at poles
+    cv::min(full_map_y_, static_cast<float>(img_height - 1.001f), full_map_y_);
+    cv::max(full_map_y_, 0.0f, full_map_y_);
     
     maps_initialized_ = true;
     new_orientation_ = false;
@@ -162,8 +168,8 @@ void Equirectangular2PerspectiveNode::imageCallback(
                 params_changed_ = false;
             }
         auto start_time = now();
-        // 3. Single Remap (Directly from Raw to Perspective)
-        cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
+        // 3. Single Remap with BORDER_WRAP to seamlessly wrap horizontal 360 boundary
+        cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR, cv::BORDER_WRAP);
 
         
 

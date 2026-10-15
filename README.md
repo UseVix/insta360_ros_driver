@@ -151,8 +151,10 @@ ros2 run insta360_ros_driver media_sdk_stitcher --ros-args \
 The default node uses `dynamicstitch`; `template`, `optflow`, and `aistitch` are
 also accepted. Camera-specific values are read automatically from
 `CameraSDK::GetPreviewParam()` by `main.cpp` and published on the reliable,
-transient-local `/insta360/camera_preview_info` topic. The MediaSDK runtime model files
-are installed by the Debian package. For CUDA/model failures, try
+transient-local `/insta360/camera_preview_info` topic. Note that MediaSDK's `RealTimeStitcher`
+requires FlowState stabilization to be enabled (`enable_flowstate: true`), which is set by default.
+The build system automatically strips conflicting bundled CUDA driver libraries from the Debian
+package so your host NVIDIA driver is utilized properly. For CUDA/model failures, try
 `stitch_type: template` first.
 
 

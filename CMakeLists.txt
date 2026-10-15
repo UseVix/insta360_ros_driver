@@ -56,6 +56,27 @@ else()
       "Failed to extract MediaSDK package ${INSTA360_MEDIA_SDK_DEB}:\n${MEDIA_SDK_EXTRACT_ERROR}")
   endif()
 
+  # Remove bundled libcuda / libcudart so the host system NVIDIA driver and CUDA are used
+  file(GLOB BUNDLED_CUDA_CONFLICTS
+    "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/libcuda.so*"
+    "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/libcudart.so*"
+  )
+  if(BUNDLED_CUDA_CONFLICTS)
+    file(REMOVE ${BUNDLED_CUDA_CONFLICTS})
+  endif()
+
+  # Set $ORIGIN RPATH on extracted MediaSDK libraries so transitive dependencies resolve
+  find_program(PATCHELF_EXECUTABLE patchelf)
+  if(PATCHELF_EXECUTABLE)
+    file(GLOB MEDIA_SDK_SHARED_LIBS "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/*.so*")
+    foreach(media_sdk_lib ${MEDIA_SDK_SHARED_LIBS})
+      execute_process(
+        COMMAND "${PATCHELF_EXECUTABLE}" --set-rpath "$ORIGIN" "${media_sdk_lib}"
+        ERROR_QUIET
+      )
+    endforeach()
+  endif()
+
   set(MEDIA_SDK_ROOT "${MEDIA_SDK_EXTRACT_DIR}/usr")
   set(MEDIA_SDK_FROM_BUNDLED_PACKAGE TRUE)
 endif()
@@ -161,6 +182,8 @@ if(MEDIA_SDK_FROM_BUNDLED_PACKAGE)
     DIRECTORY "${MEDIA_SDK_ROOT}/lib/"
     DESTINATION lib/${PROJECT_NAME}/media_sdk
     FILES_MATCHING PATTERN "*.so*"
+    PATTERN "libcuda.so*" EXCLUDE
+    PATTERN "libcudart.so*" EXCLUDE
   )
 endif()
 target_link_libraries(media_sdk_stitcher "${cpp_typesupport_target}")
