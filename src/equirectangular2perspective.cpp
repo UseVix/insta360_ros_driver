@@ -134,6 +134,13 @@ void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
         [](float y, float xz) {
             return std::atan2(y, xz);
         });
+        
+    /*
+    latitude = eigen_Y_coordinate.unaryExpr([](float value) {
+        return std::asin(value);
+    });
+    */
+
     longitude = eigen_X_coordinate.binaryExpr(
         eigen_Z_coordinate,
         [](float x, float z) {

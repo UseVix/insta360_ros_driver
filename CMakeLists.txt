@@ -66,16 +66,17 @@ else()
   endif()
 
   # Set $ORIGIN RPATH on extracted MediaSDK libraries so transitive dependencies resolve
-  find_program(PATCHELF_EXECUTABLE patchelf)
-  if(PATCHELF_EXECUTABLE)
-    file(GLOB MEDIA_SDK_SHARED_LIBS "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/*.so*")
-    foreach(media_sdk_lib ${MEDIA_SDK_SHARED_LIBS})
-      execute_process(
-        COMMAND "${PATCHELF_EXECUTABLE}" --set-rpath "$ORIGIN" "${media_sdk_lib}"
-        ERROR_QUIET
-      )
-    endforeach()
-  endif()
+  find_program(PATCHELF_EXECUTABLE patchelf REQUIRED)
+  file(GLOB MEDIA_SDK_SHARED_LIBS "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/*.so*")
+  foreach(media_sdk_lib ${MEDIA_SDK_SHARED_LIBS})
+    execute_process(
+      COMMAND "${PATCHELF_EXECUTABLE}" --set-rpath "$ORIGIN" "${media_sdk_lib}"
+      RESULT_VARIABLE PATCHELF_RESULT
+    )
+    if(NOT PATCHELF_RESULT EQUAL 0)
+      message(WARNING "Failed to set RPATH on ${media_sdk_lib}")
+    endif()
+  endforeach()
 
   set(MEDIA_SDK_ROOT "${MEDIA_SDK_EXTRACT_DIR}/usr")
   set(MEDIA_SDK_FROM_BUNDLED_PACKAGE TRUE)
