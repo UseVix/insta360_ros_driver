@@ -244,6 +244,7 @@ install(PROGRAMS
   scripts/equirectangular.py
   scripts/calibrate.py
   scripts/calibrate_cpp.py
+  scripts/find_stabilizer_offset.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

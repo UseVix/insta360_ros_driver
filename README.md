@@ -157,6 +157,57 @@ The build system automatically strips conflicting bundled CUDA driver libraries 
 package so your host NVIDIA driver is utilized properly. For CUDA/model failures, try
 `stitch_type: template` first.
 
+##### FlowState Orientation & Internal Stabilizer Offset (`find_stabilizer_offset.py`)
+
+The MediaSDK computes 3D camera stabilization orientations internally via `arvrender::SequenceStabilizer`, but Insta360 does not provide a public API method in `ins_realtime_stitcher.h` to read this orientation. In `src/media_sdk_stitcher.cpp`, the driver accesses this internal pointer at a specific byte offset inside `RealTimeStitcherImp` (default: `+ 0x260`) to publish `/equirectangular/flowstate_orientation`.
+
+**Why use this script?**
+Because the offset is private to `libMediaSDK.so`, upgrading or changing the MediaSDK `.deb` package can change this memory offset. If the offset is wrong, dereferencing it causes an immediate segmentation fault (`SIGSEGV`).
+
+**When to use it?**
+- Whenever you upgrade or replace `libMediaSDK-dev-*.deb` under `lib/`.
+- If `media_sdk_stitcher` crashes with `Aborted (core dumped)` while reading the FlowState orientation.
+- To verify the internal binary layout of a new MediaSDK release before deploying.
+
+**How to use it:**
+Run the script directly or as a ROS 2 command:
+```bash
+# Direct execution (auto-detects libMediaSDK.so in build/install dirs):
+./src/insta360_ros_driver/scripts/find_stabilizer_offset.py
+
+# Or via ROS 2:
+ros2 run insta360_ros_driver find_stabilizer_offset.py
+
+# Or specify a custom library path:
+./src/insta360_ros_driver/scripts/find_stabilizer_offset.py --so /path/to/libMediaSDK.so
+```
+
+**Expected output:**
+```
+[*] Analyzing: /camera_ws/build/insta360_ros_driver/media_sdk/usr/lib/libMediaSDK.so
+[*] Resolving dynamic symbols...
+[+] Found ins::RealTimeStitcherImp::CreateStabilizer() at 0xcd5e00
+[+] Found SequenceStabilizer::GetStabilizerQuaternion at 0x16990a0
+[*] Analyzing disassembled instructions...
+
+[+] Found memory write instructions into RealTimeStitcherImp:
+    cd60a1:	4c 89 a3 60 02 00 00 	mov    QWORD PTR [rbx+0x260],r12
+    cd60c7:	48 89 ab 68 02 00 00 	mov    QWORD PTR [rbx+0x268],rbp
+
+============================================================
+  DETECTED STABILIZER RAW POINTER OFFSET: 0x260
+  DETECTED CONTROL BLOCK OFFSET:          0x268
+============================================================
+
+Where to update this in the codebase if changed:
+  File: src/media_sdk_stitcher.cpp
+  Line:
+    auto* stabilizer = *reinterpret_cast<arvrender::SequenceStabilizer**>(
+        reinterpret_cast<char*>(imp) + 0x260);
+```
+If the detected offset changes (e.g. to `0x270` or `0x280` in a newer SDK), update the hex value in `src/media_sdk_stitcher.cpp` accordingly and rebuild.
+
+
 
 
 The launch file has the following optional arguments:

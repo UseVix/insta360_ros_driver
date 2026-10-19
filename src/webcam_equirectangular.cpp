@@ -18,8 +18,8 @@ public:
         : Node("webcam_equirectangular")
     {
         declare_parameter("device", "/dev/video0");
-        declare_parameter("width", 1920);
-        declare_parameter("height", 960);
+        declare_parameter("width", 2880);
+        declare_parameter("height", 1440);
         declare_parameter("fps", 30.0);
         declare_parameter("topic", "/equirectangular/image");
         declare_parameter("pixel_format", "MJPG");

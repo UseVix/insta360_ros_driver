@@ -142,12 +142,9 @@ void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
             return std::atan2(x, z);
         });
 
-    Matrix (full_map_x_.ptr<float>(), out_height_, out_width_) = (longitude + M_PI) / (2.0 * M_PI) * img_width;
-    Matrix (full_map_y_.ptr<float>(), out_height_, out_width_) = (M_PI / 2.0 - latitude) / M_PI * img_height;
+    Matrix (full_map_x_.ptr<float>(), out_height_, out_width_) = (longitude + M_PI) / (2.0 * M_PI) * (img_width - 1);
+    Matrix (full_map_y_.ptr<float>(), out_height_, out_width_) = (M_PI / 2.0 - latitude) / M_PI * (img_height - 1);
 
-    // Clamp vertical map_y to prevent vertical wrap at poles - that seems to be unnecesary
-    //cv::min(full_map_y_, static_cast<float>(img_height - 1.001f), full_map_y_);
-    //cv::max(full_map_y_, 0.0f, full_map_y_);
     
     maps_initialized_ = true;
     new_orientation_ = false;
@@ -170,9 +167,8 @@ void Equirectangular2PerspectiveNode::imageCallback(
                 params_changed_ = false;
             }
         auto start_time = now();
-        // 3. Single Remap with BORDER_WRAP to seamlessly wrap horizontal 360 boundary
-	// Border wrap seems to be getting rid of black line in the image
-        cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR, cv::BORDER_WRAP);
+        // 3. Remap
+        cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
 
         
 
