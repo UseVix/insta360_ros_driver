@@ -181,7 +181,7 @@ public:
         param.using_lrv = false;
 
         cam->StopLiveStreaming();
-        RCLCPP_INFO(node_->get_logger(), "Stopped residual live streaming. Waiting 5 seconds for stitcher to subscribe...");
+        RCLCPP_INFO(node_->get_logger(), "Stopped residual live streaming. Waiting 5 seconds for stitcher to subscribe and initialize itself with config and for USB driver to settle");
         rclcpp::sleep_for(std::chrono::seconds(5));
 
         if (!cam->StartLiveStreaming(param)) {
