@@ -46,7 +46,6 @@ public:
     void OnAudioData(const uint8_t* data, size_t size, int64_t timestamp) override {}
 
     void OnVideoData(const uint8_t* data, size_t size, int64_t timestamp, uint8_t streamType, int stream_index) override {
-        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "OnVideoData ts=%ld, streamType=%d, streamIndex=%d", timestamp, streamType, stream_index);
         
         if (size > 0) {
             // Publish custom message with explicit stream_type and stream_index
@@ -72,7 +71,6 @@ public:
             msg->header.frame_id = "imu_frame";
             msg->angular_velocity.x = gyro.gx;
             msg->angular_velocity.y = gyro.gy;
-            RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "OnGyroData ts=%ld", gyro.timestamp);
             msg->angular_velocity.z = gyro.gz;
             
             msg->linear_acceleration.x = gyro.ax * 9.80665;
@@ -158,7 +156,6 @@ public:
         metadata->delay_timestamp = preview.delay_timestamp;
         metadata->sweep_time = preview.sweep_time;
         metadata_pub_->publish(std::move(metadata));
-        RCLCPP_INFO(node_->get_logger(), "Published camera preview metadata for %s", preview.camera_name.c_str());
         discovery.FreeDeviceDescriptors(list);
 
         std::string video_format = preview.encode_type == ins_camera::VideoEncodeType::H265 ? "h265" : "h264";

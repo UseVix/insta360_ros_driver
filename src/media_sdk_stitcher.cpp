@@ -231,10 +231,6 @@ private:
                         quat_msg.quaternion.w = q.w;
                         orientation_pub_->publish(quat_msg);
 
-                        RCLCPP_INFO_THROTTLE(
-                            get_logger(), *get_clock(), 2000,
-                            "FlowState orientation at timestamp %ld ms: [x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
-                            timestamp, q.x, q.y, q.z, q.w);
                     } catch (...) {
                         // Stabilizer might not have enough samples yet
                     }

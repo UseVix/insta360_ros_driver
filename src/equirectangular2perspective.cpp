@@ -79,8 +79,6 @@ void Equirectangular2PerspectiveNode::loadParameters()
 
 void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
 {
-    RCLCPP_INFO(get_logger(), "Initializing perspective projection from %dx%d equirectangular image to %dx%d",
-                img_width, img_height, out_width_, out_height_);
     img_height_ = img_height;
     img_width_ = img_width;
     
@@ -149,7 +147,6 @@ void Equirectangular2PerspectiveNode::initMapping(int img_height, int img_width)
     maps_initialized_ = true;
     new_orientation_ = false;
     
-    RCLCPP_INFO(get_logger(), "Mapping matrices initialization complete");
 }
 
 
@@ -166,7 +163,6 @@ void Equirectangular2PerspectiveNode::imageCallback(
                 initMapping(rows_size, cols_size);
                 params_changed_ = false;
             }
-        auto start_time = now();
         // 3. Remap
         cv::remap(cv_ptr->image, perspective_img, full_map_x_, full_map_y_, cv::INTER_LINEAR);
 
@@ -182,8 +178,6 @@ void Equirectangular2PerspectiveNode::imageCallback(
             perspective_pub_->publish(*out_msg.toImageMsg());
         }
         
-        auto process_time = (now() - start_time).seconds();
-        RCLCPP_DEBUG(get_logger(), "Processing time: %.3f seconds", process_time);
         
     } catch (const cv_bridge::Exception& e) {
         RCLCPP_ERROR(get_logger(), "cv_bridge exception: %s", e.what());
