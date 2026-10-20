@@ -228,7 +228,7 @@ ros2 run insta360_ros_driver webcam_equirectangular --ros-args \
   --params-file config/webcam_equirectangular.yaml
 ```
 
-It requests `1920x960`, validates the returned frame is 2:1, converts it to
+It requests `2880x1440`, validates the returned frame is 2:1, converts it to
 `rgb8`, and publishes `/equirectangular/image` as a raw ROS 2 image. Webcam/UVC
 mode is controlled by Linux and the camera firmware, not by CameraSDK.
 
