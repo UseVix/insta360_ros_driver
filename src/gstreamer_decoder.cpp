@@ -19,10 +19,10 @@ public:
             "/dual_fisheye/image/compressed";
 
         declare_parameter("compressed_topic", default_topic);
-        declare_parameter("image_topic", "/dual_fisheye/image");
+        declare_parameter("uncompressed_topic", "/dual_fisheye/image");
         declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
         topic_ = get_parameter("compressed_topic").as_string();
-        image_topic_ = get_parameter("image_topic").as_string();
+        uncompressed_topic_ = get_parameter("uncompressed_topic").as_string();
         pipeline_description_ = get_parameter("pipeline").as_string();
         gst_init(nullptr, nullptr);
         GError *error = nullptr;
@@ -36,7 +36,7 @@ public:
         gst_app_sink_set_drop(sink_, true);
         gst_app_sink_set_max_buffers(sink_, 1);
         gst_element_set_state(pipeline_, GST_STATE_PLAYING);
-        publisher_ = create_publisher<sensor_msgs::msg::Image>(image_topic_, rclcpp::SensorDataQoS());
+        publisher_ = create_publisher<sensor_msgs::msg::Image>(uncompressed_topic_, rclcpp::SensorDataQoS());
 
         if (use_custom_stream_msg) {
             custom_subscription_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
@@ -51,7 +51,7 @@ public:
         RCLCPP_INFO(get_logger(), "GStreamer Decoder Node initialized");
         RCLCPP_INFO(get_logger(), "Using custom stream message: %s", use_custom_stream_msg ? "true" : "false");
         RCLCPP_INFO(get_logger(), "Subscribing to: %s", topic_.c_str());
-        RCLCPP_INFO(get_logger(), "Publishing to: %s", image_topic_.c_str());
+        RCLCPP_INFO(get_logger(), "Publishing to: %s", uncompressed_topic_.c_str());
     }
     ~GstreamerDecoderNode() override {
         if (pipeline_) gst_element_set_state(pipeline_, GST_STATE_NULL);
@@ -93,7 +93,7 @@ private:
         decode_frame(msg->data);
     }
 
-    std::string topic_, image_topic_, pipeline_description_;
+    std::string topic_, uncompressed_topic_, pipeline_description_;
     GstElement *pipeline_ = nullptr;
     GstAppSrc *source_ = nullptr;
     GstAppSink *sink_ = nullptr;

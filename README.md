@@ -72,7 +72,7 @@ By default, both decoders subscribe to the standard `sensor_msgs/msg/CompressedI
   - When `false` (default): subscribes to standard `sensor_msgs/msg/CompressedImage` on `compressed_topic` (default: `/dual_fisheye/image/compressed`).
   - When `true`: subscribes to `insta360_ros_driver/msg/CameraCompressedStreamData` on `compressed_topic` (default: `/dual_fisheye/image/compressed_stream`).
 - **`compressed_topic`** (`string`): The topic to subscribe to. Defaults to `/dual_fisheye/image/compressed` if `use_custom_stream_msg` is `false`, or `/dual_fisheye/image/compressed_stream` if `true`.
-- **`uncompressed_topic`** / **`image_topic`** (`string`, default: `/dual_fisheye/image`): Output topic for decoded images (`uncompressed_topic` in `ffmpeg_decoder`, `image_topic` in `gstreamer_decoder`).
+- **`uncompressed_topic`** (`string`, default: `/dual_fisheye/image`): Output topic for decoded images.
 - **`skip_frame`** (`int`, default: `0`, FFmpeg only): Skip every N frames to reduce downstream compute.
 - **`i_frame_only`** (`bool`, default: `false`, FFmpeg only): Decode keyframes (I-frames) only (~1-2 FPS).
 
@@ -228,7 +228,7 @@ ros2 run insta360_ros_driver webcam_equirectangular --ros-args \
   --params-file config/webcam_equirectangular.yaml
 ```
 
-It requests `1920x960`, validates the returned frame is 2:1, converts it to
+It requests `2880x1440`, validates the returned frame is 2:1, converts it to
 `rgb8`, and publishes `/equirectangular/image` as a raw ROS 2 image. Webcam/UVC
 mode is controlled by Linux and the camera firmware, not by CameraSDK.
 
