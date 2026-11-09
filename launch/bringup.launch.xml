@@ -11,8 +11,8 @@
     <!-- Publishes Compressed Stream Data -->
     <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
 
-    <!-- Decodes Compressed Images (directly consumes custom CameraCompressedStreamData) -->
-    <node pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="log">
+    <!-- Decodes and stitches Compressed Images (directly consumes custom CameraCompressedStreamData) -->
+    <node pkg="insta360_ros_driver" exec="media_sdk_stitcher" name="media_sdk_stitcher" output="log">
         <param name="use_custom_stream_msg" value="true"/>
         <param name="compressed_topic" value="/dual_fisheye/image/compressed_stream"/>
         <param name="uncompressed_topic" value="/dual_fisheye/image"/>
