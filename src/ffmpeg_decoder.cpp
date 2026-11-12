@@ -324,16 +324,16 @@ private:
     }
 
 public:
-    H264DecoderNode() : Node("h264_decoder_node") {
+    H264DecoderNode() : Node("ffmpeg_decoder") {
         this->declare_parameter("use_custom_stream_msg", false);
         bool use_custom_stream_msg = this->get_parameter("use_custom_stream_msg").as_bool();
 
         std::string default_topic = use_custom_stream_msg ?
             "/dual_fisheye/image/compressed_stream" :
-            "/dual_fisheye/image/compressed";
+            "/equirectangular/image/h264";
 
         this->declare_parameter("compressed_topic", default_topic);
-        this->declare_parameter("uncompressed_topic", "/dual_fisheye/image");
+        this->declare_parameter("uncompressed_topic", "/equirectangular/image/decoded");
         this->declare_parameter("skip_frame", 0);
         this->declare_parameter("i_frame_only", false);
 

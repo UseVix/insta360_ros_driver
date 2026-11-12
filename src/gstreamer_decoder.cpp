@@ -16,10 +16,10 @@ public:
 
         std::string default_topic = use_custom_stream_msg ?
             "/dual_fisheye/image/compressed_stream" :
-            "/dual_fisheye/image/compressed";
+            "/equirectangular/image/h264";
 
         declare_parameter("compressed_topic", default_topic);
-        declare_parameter("uncompressed_topic", "/dual_fisheye/image");
+        declare_parameter("uncompressed_topic", "/equirectangular/image/decoded");
         declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
         topic_ = get_parameter("compressed_topic").as_string();
         uncompressed_topic_ = get_parameter("uncompressed_topic").as_string();

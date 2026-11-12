@@ -1,10 +1,17 @@
 <?xml version="1.0"?>
 <launch>
     <arg name="dual_fisheye2equirectangular" default="false"/>
+    <arg name="media_sdk_stitcher" default="true"/>
+    <arg name="ffmpeg_decoder" default="false"/>
+    <arg name="gstreamer_encoder" default="true"/>
+    <arg name="udp" default="false"/>
     <arg name="dual_fisheye2perspective" default="true"/>
     <arg name="equirectangular2perspective" default="false"/>
     <arg name="imu_filter" default="true"/>
     <arg name="dual_fisheye2equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2equirectangular.yaml"/>
+    <arg name="media_sdk_stitcher_config" default="$(find-pkg-share insta360_ros_driver)/config/media_sdk_stitcher.yaml"/>
+    <arg name="ffmpeg_decoder_config" default="$(find-pkg-share insta360_ros_driver)/config/ffmpeg_decoder.yaml"/>
+    <arg name="gstreamer_encoder_config" default="$(find-pkg-share insta360_ros_driver)/config/gstreamer_encoder.yaml"/>
     <arg name="dual_fisheye2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2perspective.yaml"/>
     <arg name="equirectangular2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular2perspective.yaml"/>
     <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
@@ -12,19 +19,17 @@
     <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
 
     <!-- Decodes Compressed Images (directly consumes custom CameraCompressedStreamData) -->
-    <node pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="log">
-        <param name="use_custom_stream_msg" value="true"/>
-        <param name="compressed_topic" value="/dual_fisheye/image/compressed_stream"/>
-        <param name="uncompressed_topic" value="/dual_fisheye/image"/>
-        <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
-        <param name="skip_frame" value="0"/>
-        <!-- If you want to minimize the CPU load the most, you can decode only the i-frames. But the expected FPS is about 1-2 FPS -->
-        <param name="i_frame_only" value="false"/> 
+    <node if="$(var ffmpeg_decoder)" pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="log">
+        <param from="$(var ffmpeg_decoder_config)"/>
     </node>
 
-    <!-- Creates Equirectangular Images -->
+    <!-- Creates Equirectangular Images via CPU/OpenCV -->
     <node if="$(var dual_fisheye2equirectangular)" pkg="insta360_ros_driver" exec="dual_fisheye2equirectangular_cpp" name="dual_fisheye2equirectangular_node" output="screen">
         <param from="$(var dual_fisheye2equirectangular_config)" />
+    </node>
+    <!-- Stitches Equirectangular Images via MediaSDK RealTimeStitcher -->
+    <node if="$(var media_sdk_stitcher)" pkg="insta360_ros_driver" exec="media_sdk_stitcher" name="media_sdk_stitcher" output="screen">
+        <param from="$(var media_sdk_stitcher_config)"/>
     </node>
     <!-- Creates Perspective Images from dual-fisheye images -->
     <node if="$(var dual_fisheye2perspective)" pkg="insta360_ros_driver" exec="dual_fisheye2perspective_cpp" name="dual_fisheye2perspective_node" output="screen">
@@ -37,5 +42,13 @@
     <!-- Applies a Madgwick Filter to the 6-DOF IMU to get Orientation -->
     <node if="$(var imu_filter)" pkg="imu_filter_madgwick" exec="imu_filter_madgwick_node" name="imu_filter" output="log">
         <param from="$(var imu_config)"/>
+    </node>
+
+    <!-- Encodes and streams images via GStreamer (ROS topic by default, or UDP) -->
+    <let name="gstreamer_transport" value="udp" if="$(var udp)"/>
+    <let name="gstreamer_transport" value="ros" unless="$(var udp)"/>
+    <node if="$(var gstreamer_encoder)" pkg="insta360_ros_driver" exec="gstreamer_encoder" name="gstreamer_encoder" output="screen">
+        <param from="$(var gstreamer_encoder_config)"/>
+        <param name="transport" value="$(var gstreamer_transport)"/>
     </node>
 </launch>

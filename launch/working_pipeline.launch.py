@@ -10,12 +10,15 @@ def generate_launch_description():
             name='insta360_ros_driver',
             output='screen'
         ),
-        # 2. FFmpeg Decoder Node (decompresses /dual_fisheye/image/compressed_stream directly)
+        # 2. FFmpeg Decoder Node (decompresses /dual_fisheye/image/compressed_stream to /dual_fisheye/image)
         Node(
             package='insta360_ros_driver',
             executable='ffmpeg_decoder',
             name='ffmpeg_decoder',
-            parameters=[{'use_custom_stream_msg': True}],
+            parameters=[{
+                'use_custom_stream_msg': True,
+                'uncompressed_topic': '/dual_fisheye/image'
+            }],
             output='screen'
         ),
         # 4. CPU OpenCV Stitcher Node (stitches /dual_fisheye/image -> /equirectangular/image)

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Switch between ROS topic receiver (false, default) and direct UDP receiver (true) -->
+    <arg name="udp" default="false" description="Receive stream via direct UDP (true) or ROS topic via gstreamer_decoder (false, default)"/>
+    <arg name="gstreamer_decoder_config" default="$(find-pkg-share insta360_ros_driver)/config/gstreamer_decoder.yaml" description="Path to gstreamer_decoder config file"/>
+    <arg name="udp_port" default="5000" description="Port for UDP reception"/>
+    <arg name="udp_pipeline" default="gst-launch-1.0 udpsrc port=$(var udp_port) caps=&quot;application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000&quot; ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink" description="GStreamer pipeline command for direct UDP mode"/>
+
+    <!-- ROS topic receiver: decodes /equirectangular/image/h264 to raw ROS image topic -->
+    <node unless="$(var udp)" pkg="insta360_ros_driver" exec="gstreamer_decoder" name="gstreamer_decoder" output="screen">
+        <param from="$(var gstreamer_decoder_config)"/>
+    </node>
+
+    <!-- Direct UDP receiver: receives RTP/H264 stream and displays with autovideosink -->
+    <executable if="$(var udp)" cmd="$(var udp_pipeline)" output="screen"/>
+</launch>
