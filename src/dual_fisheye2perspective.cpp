@@ -23,6 +23,9 @@ DualFisheye2PerspectiveNode::DualFisheye2PerspectiveNode()
     declare_parameter("out_height", 960);
     declare_parameter("horizontal_fov", 120.0);
     declare_parameter("vertical_fov", 81.7867893);
+    declare_parameter("input_topic", "/dual_fisheye/image");
+    declare_parameter("camera_orientation_topic", "/camera_orientation/quaternion");
+    declare_parameter("output_topic", "/perspective/image");
     
     // Load parameters
     loadParameters();
@@ -40,13 +43,17 @@ DualFisheye2PerspectiveNode::DualFisheye2PerspectiveNode()
     // Configure QoS
     auto qos = rclcpp::QoS(1).reliable();
     
+    std::string input_topic = get_parameter("input_topic").as_string();
+    std::string camera_orientation_topic = get_parameter("camera_orientation_topic").as_string();
+    std::string output_topic = get_parameter("output_topic").as_string();
+
     // Create publishers and subscribers
     dual_fisheye_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "/dual_fisheye/image", qos,
+        input_topic, qos,
         std::bind(&DualFisheye2PerspectiveNode::imageCallback, this, std::placeholders::_1));
 
     camera_orientation_sub_ = create_subscription<geometry_msgs::msg::Quaternion>(
-        "/camera_orientation/quaternion", qos,
+        camera_orientation_topic, qos,
         [this](const geometry_msgs::msg::Quaternion::SharedPtr msg) {
             tf2::fromMsg(*msg, camera_orientation_quaternion_);
 
@@ -60,7 +67,7 @@ DualFisheye2PerspectiveNode::DualFisheye2PerspectiveNode()
         });
     
     perspective_pub_ = create_publisher<sensor_msgs::msg::Image>(
-        "/perspective/image", qos);
+        output_topic, qos);
 }
 
 DualFisheye2PerspectiveNode::~DualFisheye2PerspectiveNode()

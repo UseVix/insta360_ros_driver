@@ -1,5 +1,7 @@
 dual_fisheye2equirectangular_node:
   ros__parameters:
+    input_topic: /dual_fisheye/image
+    output_topic: /equirectangular/image
     cx_offset: 0.0
     cy_offset: 0.0
     crop_size: 0

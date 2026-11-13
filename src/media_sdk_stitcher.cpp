@@ -42,6 +42,9 @@ public:
         declare_parameter("input_video_topic", "/dual_fisheye/image/compressed_stream");
         declare_parameter("input_imu_topic", "/imu/data_raw");
         declare_parameter("output_topic", "/equirectangular/image");
+        declare_parameter("orientation_topic", "/equirectangular/flowstate_orientation");
+        declare_parameter("exposure_data_topic", "/camera/exposure_data");
+        declare_parameter("camera_preview_info_topic", "/insta360/camera_preview_info");
         declare_parameter("output_width", 1920);
         declare_parameter("output_height", 960);
         declare_parameter("stitch_type", "dynamicstitch");
@@ -57,7 +60,7 @@ public:
         output_pub_ = create_publisher<sensor_msgs::msg::Image>(
             get_parameter("output_topic").as_string(), rclcpp::SensorDataQoS());
         orientation_pub_ = create_publisher<geometry_msgs::msg::QuaternionStamped>(
-            "/equirectangular/flowstate_orientation", rclcpp::SensorDataQoS());
+            get_parameter("orientation_topic").as_string(), rclcpp::SensorDataQoS());
         // Use RELIABLE QoS(10) to match publisher and prevent packet drops
         video_sub_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
             get_parameter("input_video_topic").as_string(), rclcpp::QoS(10),
@@ -66,12 +69,12 @@ public:
             get_parameter("input_imu_topic").as_string(), rclcpp::SensorDataQoS(),
             std::bind(&MediaSdkStitcherNode::imu_callback, this, std::placeholders::_1));
         exposure_sub_ = create_subscription<insta360_ros_driver::msg::ExposureData>(
-            "/camera/exposure_data", rclcpp::SystemDefaultsQoS(),
+            get_parameter("exposure_data_topic").as_string(), rclcpp::SystemDefaultsQoS(),
             std::bind(&MediaSdkStitcherNode::exposure_callback, this, std::placeholders::_1));
         rclcpp::QoS metadata_qos(1);
         metadata_qos.reliable().transient_local();
         metadata_sub_ = create_subscription<insta360_ros_driver::msg::CameraPreviewInfo>(
-            "/insta360/camera_preview_info", metadata_qos,
+            get_parameter("camera_preview_info_topic").as_string(), metadata_qos,
             std::bind(&MediaSdkStitcherNode::metadata_callback, this, std::placeholders::_1));
         RCLCPP_INFO(get_logger(), "Waiting for camera preview metadata");
     }

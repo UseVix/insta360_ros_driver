@@ -3,6 +3,9 @@ media_sdk_stitcher:
     input_video_topic: /dual_fisheye/image/compressed_stream
     input_imu_topic: /imu/data_raw
     output_topic: /equirectangular/image
+    orientation_topic: /equirectangular/flowstate_orientation
+    exposure_data_topic: /camera/exposure_data
+    camera_preview_info_topic: /insta360/camera_preview_info
     output_width: 1920
     output_height: 960
     stitch_type: dynamicstitch

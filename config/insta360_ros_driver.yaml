@@ -1,0 +1,6 @@
+insta360_ros_driver:
+  ros__parameters:
+    compressed_stream_topic: /dual_fisheye/image/compressed_stream
+    imu_topic: imu/data_raw
+    exposure_data_topic: /camera/exposure_data
+    camera_preview_info_topic: /insta360/camera_preview_info

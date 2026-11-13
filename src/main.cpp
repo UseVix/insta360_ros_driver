@@ -27,18 +27,31 @@ private:
 public:
     TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264")
         : node_(node), video_format_(video_format) {
+        if (!node_->has_parameter("compressed_stream_topic")) {
+            node_->declare_parameter("compressed_stream_topic", "/dual_fisheye/image/compressed_stream");
+        }
+        if (!node_->has_parameter("imu_topic")) {
+            node_->declare_parameter("imu_topic", "imu/data_raw");
+        }
+        if (!node_->has_parameter("exposure_data_topic")) {
+            node_->declare_parameter("exposure_data_topic", "/camera/exposure_data");
+        }
+        std::string stream_topic = node_->get_parameter("compressed_stream_topic").as_string();
+        std::string imu_topic = node_->get_parameter("imu_topic").as_string();
+        std::string exposure_topic = node_->get_parameter("exposure_data_topic").as_string();
+
         // Publisher for custom CameraCompressedStreamData including stream_type and stream_index
         stream_data_pub_ = node_->create_publisher<insta360_ros_driver::msg::CameraCompressedStreamData>(
-            "/dual_fisheye/image/compressed_stream", 
+            stream_topic, 
             rclcpp::QoS(10)
         );
 
         // Publisher for IMU data
-        imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
+        imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS());
         
         // Publisher for exposure data
-        exposure_pub_ = node_->create_publisher<insta360_ros_driver::msg::ExposureData>("/camera/exposure_data", rclcpp::SystemDefaultsQoS());
-        RCLCPP_INFO(node_->get_logger(), "Publisher for compressed stream data (%s) and IMU created.", video_format_.c_str());
+        exposure_pub_ = node_->create_publisher<insta360_ros_driver::msg::ExposureData>(exposure_topic, rclcpp::SystemDefaultsQoS());
+        RCLCPP_INFO(node_->get_logger(), "Publisher for compressed stream data (%s) on %s and IMU on %s created.", video_format_.c_str(), stream_topic.c_str(), imu_topic.c_str());
     }
 
     virtual ~TestStreamDelegate() {}
@@ -121,10 +134,15 @@ public:
     int run_camera() {
         ins_camera::DeviceDiscovery discovery;
 
+        if (!node_->has_parameter("camera_preview_info_topic")) {
+            node_->declare_parameter("camera_preview_info_topic", "/insta360/camera_preview_info");
+        }
+        std::string preview_topic = node_->get_parameter("camera_preview_info_topic").as_string();
+
         rclcpp::QoS metadata_qos(1);
         metadata_qos.reliable().transient_local();
         metadata_pub_ = node_->create_publisher<insta360_ros_driver::msg::CameraPreviewInfo>(
-            "/insta360/camera_preview_info", metadata_qos);
+            preview_topic, metadata_qos);
 
         auto list = discovery.GetAvailableDevices();
         if (list.empty()) {
@@ -196,7 +214,7 @@ public:
 
 int main(int argc, char* argv[]) {
     rclcpp::init(argc, argv);
-    auto node = rclcpp::Node::make_shared("insta_publisher");
+    auto node = rclcpp::Node::make_shared("insta360_ros_driver");
     
     CameraWrapper camera(node);
     if (camera.run_camera() != 0) {

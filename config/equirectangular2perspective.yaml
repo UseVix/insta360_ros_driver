@@ -1,5 +1,8 @@
 equirectangular2perspective_node:
   ros__parameters:
+    input_topic: /equirectangular/image
+    camera_orientation_topic: /camera_orientation/quaternion
+    output_topic: /perspective/image
     out_width: 1920
     out_height: 960
     horizontal_fov: 120.0

@@ -20,6 +20,8 @@ DualFisheye2EquirectangularNode::DualFisheye2EquirectangularNode()
     declare_parameter("gpu", true);
     declare_parameter("out_width", 1920);
     declare_parameter("out_height", 960);
+    declare_parameter("input_topic", "/dual_fisheye/image");
+    declare_parameter("output_topic", "/equirectangular/image");
     
     // Load parameters
     loadParameters();
@@ -37,13 +39,16 @@ DualFisheye2EquirectangularNode::DualFisheye2EquirectangularNode()
     // Configure QoS
     auto qos = rclcpp::QoS(1).reliable();
     
+    std::string input_topic = get_parameter("input_topic").as_string();
+    std::string output_topic = get_parameter("output_topic").as_string();
+
     // Create publishers and subscribers
     dual_fisheye_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        "/dual_fisheye/image", qos,
+        input_topic, qos,
         std::bind(&DualFisheye2EquirectangularNode::imageCallback, this, std::placeholders::_1));
     
     equirect_pub_ = create_publisher<sensor_msgs::msg::Image>(
-        "/equirectangular/image", qos);
+        output_topic, qos);
 }
 
 DualFisheye2EquirectangularNode::~DualFisheye2EquirectangularNode()

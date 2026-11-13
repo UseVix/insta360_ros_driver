@@ -90,27 +90,18 @@ Every node in this package can be run individually from the command line using `
 ### 1. Camera Driver (`insta360_ros_driver`)
 Connects directly to the Insta360 camera hardware over USB, synchronizes system time to the camera, initializes live video streaming, and broadcasts compressed video packets alongside raw inertial motion measurements and camera telemetry.
 
-#### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| None | - | This node does not subscribe to any topics |
-
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/dual_fisheye/image/compressed_stream` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Stream packets containing compressed H.264/H.265 payload, stream type, and lens index |
-| `imu/data_raw` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry (angular velocity and linear acceleration) |
-| `/camera/exposure_data` | `insta360_ros_driver/msg/ExposureData` | Camera exposure time and timestamp metadata |
-| `/insta360/camera_preview_info` | `insta360_ros_driver/msg/CameraPreviewInfo` | Latched camera preview parameters, crop offsets, sweep time, and calibration info |
-
-#### Parameters
-| Parameter | Type | Default | Description |
+| Topic Name (Default) | Parameter | Type | Description |
 | :--- | :--- | :--- | :--- |
-| None | - | - | Live stream parameters (e.g. resolution and bitrate) are configured in code (`src/main.cpp`) |
+| `/dual_fisheye/image/compressed_stream` | `compressed_stream_topic` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Stream packets containing compressed H.264/H.265 payload, stream type, and lens index |
+| `imu/data_raw` | `imu_topic` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry (angular velocity and linear acceleration) |
+| `/camera/exposure_data` | `exposure_data_topic` | `insta360_ros_driver/msg/ExposureData` | Camera exposure time and timestamp metadata |
+| `/insta360/camera_preview_info` | `camera_preview_info_topic` | `insta360_ros_driver/msg/CameraPreviewInfo` | Latched camera preview parameters, crop offsets, sweep time, and calibration info |
 
 #### CLI Usage
 ```bash
-ros2 run insta360_ros_driver insta360_ros_driver
+ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
+  --params-file config/insta360_ros_driver.yaml
 ```
 
 ---
@@ -119,21 +110,19 @@ ros2 run insta360_ros_driver insta360_ros_driver
 Decodes compressed H.264 video streams using FFmpeg (`libavcodec`) hardware or software decoding and produces standard uncompressed BGR image frames.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<compressed_topic>` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`) |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `compressed_topic` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`; defaults to `/dual_fisheye/image/compressed_stream` when `use_custom_stream_msg` is `true`) |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<uncompressed_topic>` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/decoded` | `uncompressed_topic` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
-| `compressed_topic` | `string` | `"/equirectangular/image/h264"` | Input compressed video topic (defaults to `"/dual_fisheye/image/compressed_stream"` if `use_custom_stream_msg` is `true`) |
-| `uncompressed_topic` | `string` | `"/equirectangular/image/decoded"` | Output uncompressed image topic |
 | `skip_frame` | `int` | `0` | Number of frames to skip between decoded outputs (0 = decode all frames) |
 | `i_frame_only` | `bool` | `false` | When `true`, decodes keyframes (I-frames) only to reduce computational overhead |
 
@@ -155,21 +144,19 @@ ros2 run insta360_ros_driver ffmpeg_decoder --ros-args \
 Decodes compressed H.264 video streams using a configurable GStreamer pipeline and outputs raw BGR images.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<compressed_topic>` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`) |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `compressed_topic` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`; defaults to `/dual_fisheye/image/compressed_stream` when `use_custom_stream_msg` is `true`) |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<uncompressed_topic>` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/decoded` | `uncompressed_topic` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
-| `compressed_topic` | `string` | `"/equirectangular/image/h264"` | Input compressed video topic (defaults to `"/dual_fisheye/image/compressed_stream"` if `use_custom_stream_msg` is `true`) |
-| `uncompressed_topic` | `string` | `"/equirectangular/image/decoded"` | Output uncompressed image topic |
 | `pipeline` | `string` | `"appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
 
 #### CLI Usage
@@ -190,20 +177,18 @@ ros2 run insta360_ros_driver gstreamer_decoder --ros-args \
 Encodes raw uncompressed video frames into H.264 video using GStreamer and transmits the compressed stream either over a ROS topic or as an RTP/UDP network stream.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<input_topic>` | `sensor_msgs/msg/Image` | Uncompressed BGR image stream to encode |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed BGR image stream to encode |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<output_topic>` | `sensor_msgs/msg/CompressedImage` | Encoded H.264 video frames (published when `transport` is `"ros"`) |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `output_topic` | `sensor_msgs/msg/CompressedImage` | Encoded H.264 video frames (published when `transport` is `"ros"`) |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `input_topic` | `string` | `"/equirectangular/image"` | Source uncompressed image topic |
-| `output_topic` | `string` | `"/equirectangular/image/h264"` | Destination ROS compressed topic (when `transport` is `"ros"`) |
 | `transport` | `string` | `"ros"` | Transmission protocol (`"ros"` or `"udp"`) |
 | `pipeline` | `string` | `"appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=4000 ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"` | GStreamer pipeline used when `transport` is `"udp"` |
 | `ros_pipeline` | `string` | `"appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency ! h264parse ! appsink name=ros_sink sync=false"` | GStreamer pipeline used when `transport` is `"ros"` |
@@ -227,25 +212,22 @@ ros2 run insta360_ros_driver gstreamer_encoder --ros-args \
 Performs real-time hardware-accelerated stitching of dual-fisheye video packets and IMU motion data into stabilized 360° equirectangular panoramas using the Insta360 MediaSDK library. It also estimates and outputs the camera's 3D stabilization orientation quaternion.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<input_video_topic>` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed camera stream packets containing dual-fisheye frames |
-| `<input_imu_topic>` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry used for FlowState gyro stabilization |
-| `/camera/exposure_data` | `insta360_ros_driver/msg/ExposureData` | Exposure metadata for image stitching illumination correction |
-| `/insta360/camera_preview_info` | `insta360_ros_driver/msg/CameraPreviewInfo` | Camera crop parameters, optical offset, and timing metadata |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image/compressed_stream` | `input_video_topic` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed camera stream packets containing dual-fisheye frames |
+| `/imu/data_raw` | `input_imu_topic` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry used for FlowState gyro stabilization |
+| `/camera/exposure_data` | `exposure_data_topic` | `insta360_ros_driver/msg/ExposureData` | Exposure metadata for image stitching illumination correction |
+| `/insta360/camera_preview_info` | `camera_preview_info_topic` | `insta360_ros_driver/msg/CameraPreviewInfo` | Camera crop parameters, optical offset, and timing metadata |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<output_topic>` | `sensor_msgs/msg/Image` | Stitched 360° equirectangular panorama image |
-| `/equirectangular/flowstate_orientation` | `geometry_msgs/msg/QuaternionStamped` | Camera 3D stabilization orientation quaternion |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `output_topic` | `sensor_msgs/msg/Image` | Stitched 360° equirectangular panorama image |
+| `/equirectangular/flowstate_orientation` | `orientation_topic` | `geometry_msgs/msg/QuaternionStamped` | Camera 3D stabilization orientation quaternion |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `input_video_topic` | `string` | `"/dual_fisheye/image/compressed_stream"` | Topic for incoming compressed video stream packets |
-| `input_imu_topic` | `string` | `"/imu/data_raw"` | Topic for incoming IMU telemetry |
-| `output_topic` | `string` | `"/equirectangular/image"` | Topic for stitched equirectangular output images |
 | `output_width` | `int` | `1920` | Output panorama width in pixels |
 | `output_height` | `int` | `960` | Output panorama height in pixels |
 | `stitch_type` | `string` | `"dynamicstitch"` | Stitching algorithm (`dynamicstitch`, `template`, `optflow`, `aistitch`) |
@@ -277,26 +259,26 @@ If the detected offset changes from default `0x260` (e.g. `0x270`), update the h
 Stitches uncompressed dual-fisheye images into 360° equirectangular panoramas using OpenCV remapping on CPU or GPU with configurable lens alignment calibrations.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/dual_fisheye/image` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/equirectangular/image` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `output_topic` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `cx_offset` | `double` | `0.0` | Horizontal optical center shift for fisheye lenses in pixels |
-| `cy_offset` | `double` | `0.0` | Vertical optical center shift for fisheye lenses in pixels |
-| `crop_size` | `int` | `0` | Crop region diameter in pixels (0 = auto-computed from image dimensions) |
-| `translation` | `double[]` | `[0.0, 0.0, -0.105]` | Extrinsic translation vector `[x, y, z]` between lenses in meters |
-| `rotation_deg` | `double[]` | `[-0.5, 0.0, 1.1]` | Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
-| `gpu` | `bool` | `true` | Enables GPU-accelerated remap (falls back to CPU if OpenCV CUDA is unavailable) |
-| `out_width` | `int` | `1920` | Width of output equirectangular image in pixels |
-| `out_height` | `int` | `960` | Height of output equirectangular image in pixels |
+| `cx_offset` | `double` | `0.0` | (dynamically reconfigurable) Horizontal optical center shift for fisheye lenses in pixels |
+| `cy_offset` | `double` | `0.0` | (dynamically reconfigurable) Vertical optical center shift for fisheye lenses in pixels |
+| `crop_size` | `int` | `0` | (dynamically reconfigurable) Crop region diameter in pixels (0 = auto-computed from image dimensions) |
+| `translation` | `double[]` | `[0.0, 0.0, -0.105]` | (dynamically reconfigurable) Extrinsic translation vector `[x, y, z]` between lenses in meters |
+| `rotation_deg` | `double[]` | `[-0.5, 0.0, 1.1]` | (dynamically reconfigurable) Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
+| `gpu` | `bool` | `true` | (dynamically reconfigurable) Enables GPU-accelerated remap (falls back to CPU if OpenCV CUDA is unavailable) |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output equirectangular image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output equirectangular image in pixels |
 
 #### CLI Usage
 ```bash
@@ -310,29 +292,29 @@ ros2 run insta360_ros_driver dual_fisheye2equirectangular_cpp --ros-args \
 Generates a virtual rectilinear perspective camera viewport directly from uncompressed dual-fisheye images with configurable field of view and real-time viewing orientation control.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/dual_fisheye/image` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
-| `/camera_orientation/quaternion` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective camera direction |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
+| `/camera_orientation/quaternion` | `camera_orientation_topic` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective camera direction |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/perspective/image` | `sensor_msgs/msg/Image` | Rectilinear perspective view image |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/perspective/image` | `output_topic` | `sensor_msgs/msg/Image` | Rectilinear perspective view image |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `cx_offset` | `double` | `0.0` | Horizontal optical center shift for fisheye lenses in pixels |
-| `cy_offset` | `double` | `0.0` | Vertical optical center shift for fisheye lenses in pixels |
-| `crop_size` | `int` | `0` | Crop region diameter in pixels (0 = auto-computed from image dimensions) |
-| `translation` | `float[]` | `[0.0, 0.0, -0.105]` | Extrinsic translation vector `[x, y, z]` between lenses in meters |
-| `rotation_deg` | `float[]` | `[-0.5, 0.0, 1.1]` | Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
-| `gpu` | `bool` | `true` | Enables GPU-accelerated remap |
-| `out_width` | `int` | `1920` | Width of output perspective image in pixels |
-| `out_height` | `int` | `960` | Height of output perspective image in pixels |
-| `horizontal_fov` | `double` | `120.0` | Horizontal field of view in degrees |
-| `vertical_fov` | `double` | `81.7867893` | Vertical field of view in degrees |
+| `cx_offset` | `double` | `0.0` | (dynamically reconfigurable) Horizontal optical center shift for fisheye lenses in pixels |
+| `cy_offset` | `double` | `0.0` | (dynamically reconfigurable) Vertical optical center shift for fisheye lenses in pixels |
+| `crop_size` | `int` | `0` | (dynamically reconfigurable) Crop region diameter in pixels (0 = auto-computed from image dimensions) |
+| `translation` | `float[]` | `[0.0, 0.0, -0.105]` | (dynamically reconfigurable) Extrinsic translation vector `[x, y, z]` between lenses in meters |
+| `rotation_deg` | `float[]` | `[-0.5, 0.0, 1.1]` | (dynamically reconfigurable) Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
+| `gpu` | `bool` | `true` | (dynamically reconfigurable) Enables GPU-accelerated remap |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output perspective image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output perspective image in pixels |
+| `horizontal_fov` | `double` | `120.0` | (dynamically reconfigurable) Horizontal field of view in degrees |
+| `vertical_fov` | `double` | `81.7867893` | (dynamically reconfigurable) Vertical field of view in degrees |
 
 #### CLI Usage
 ```bash
@@ -346,23 +328,23 @@ ros2 run insta360_ros_driver dual_fisheye2perspective_cpp --ros-args \
 Extracts a rectilinear perspective virtual camera view from a stitched 360° equirectangular panorama with configurable field of view and dynamic orientation control.
 
 #### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/equirectangular/image` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
-| `/camera_orientation/quaternion` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective viewport direction |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `input_topic` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
+| `/camera_orientation/quaternion` | `camera_orientation_topic` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective viewport direction |
 
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `/perspective/image` | `sensor_msgs/msg/Image` | Extracted rectilinear perspective image |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/perspective/image` | `output_topic` | `sensor_msgs/msg/Image` | Extracted rectilinear perspective image |
 
 #### Parameters
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `out_width` | `int` | `1920` | Width of output perspective image in pixels |
-| `out_height` | `int` | `960` | Height of output perspective image in pixels |
-| `horizontal_fov` | `double` | `120.0` | Horizontal field of view in degrees |
-| `vertical_fov` | `double` | `81.7867893` | Vertical field of view in degrees |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output perspective image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output perspective image in pixels |
+| `horizontal_fov` | `double` | `120.0` | (dynamically reconfigurable) Horizontal field of view in degrees |
+| `vertical_fov` | `double` | `81.7867893` | (dynamically reconfigurable) Vertical field of view in degrees |
 
 #### CLI Usage
 ```bash
@@ -372,56 +354,13 @@ ros2 run insta360_ros_driver equirectangular2perspective_cpp --ros-args \
 
 ---
 
-### 9. IMU Orientation Filter (`imu_filter_madgwick`)
-Fuses 6-DOF IMU angular rates and linear accelerations using the Madgwick AHRS algorithm to estimate camera orientation, and optionally broadcasts spatial coordinate transforms.
-
-#### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `imu/data_raw` | `sensor_msgs/msg/Imu` | Raw IMU measurements from the camera driver |
-| `imu/mag` | `sensor_msgs/msg/MagneticField` | Magnetic field measurements (optional, only used if `use_mag` is `true`) |
-
-#### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `imu/data` | `sensor_msgs/msg/Imu` | Filtered IMU message containing estimated orientation quaternion |
-| `/tf` | `tf2_msgs/msg/TFMessage` | Coordinate frame transform between `fixed_frame` and child frame (when `publish_tf` is `true`) |
-
-#### Parameters
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `gain` | `double` | `0.1` | Filter gain determining orientation responsiveness vs. noise rejection |
-| `zeta` | `double` | `0.0` | Gyro drift bias calculation parameter |
-| `world_frame` | `string` | `"nwu"` | World frame convention (`"nwu"`, `"enu"`, `"ned"`) |
-| `fixed_frame` | `string` | `"imu_stabilized"` | Reference coordinate frame ID for published TF transforms |
-| `publish_tf` | `bool` | `true` | Whether to broadcast orientation transform to `/tf` |
-| `reverse_tf` | `bool` | `false` | Reverses parent/child direction of broadcast TF transforms |
-| `use_mag` | `bool` | `false` | Enables fusion of magnetometer data |
-| `stateless` | `bool` | `false` | Operates in stateless mode without past history |
-| `constant_dt` | `double` | `0.0` | Overrides time delta with a constant value (0.0 = compute from message timestamps) |
-| `publish_debug_topics` | `bool` | `false` | Enables debug telemetry topics |
-| `orientation_stddev` | `double` | `0.0` | Standard deviation assigned to estimated orientation covariance |
-
-#### CLI Usage
-```bash
-ros2 run imu_filter_madgwick imu_filter_madgwick_node --ros-args \
-  --params-file config/imu_filter.yaml
-```
-
----
-
-### 10. Webcam Equirectangular Node (`webcam_equirectangular`)
+### 9. Webcam Equirectangular Node (`webcam_equirectangular`)
 Captures video frames from standard UVC webcam devices, verifies 2:1 aspect ratio, and outputs raw equirectangular video frames.
 
-#### Subscribed Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| None | - | This node does not subscribe to any topics |
-
 #### Published Topics
-| Topic | Type | Description |
-| :--- | :--- | :--- |
-| `<topic>` | `sensor_msgs/msg/Image` | Captured raw equirectangular video frames |
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `topic` | `sensor_msgs/msg/Image` | Captured raw equirectangular video frames |
 
 #### Parameters
 | Parameter | Type | Default | Description |
@@ -430,7 +369,6 @@ Captures video frames from standard UVC webcam devices, verifies 2:1 aspect rati
 | `width` | `int` | `2880` | Frame capture width in pixels |
 | `height` | `int` | `1440` | Frame capture height in pixels |
 | `fps` | `double` | `30.0` | Frame capture rate in FPS |
-| `topic` | `string` | `"/equirectangular/image"` | Output ROS image topic name |
 | `pixel_format` | `string` | `"MJPG"` | V4L2 pixel capture format (`"MJPG"` or `"YUYV"`) |
 
 #### CLI Usage
@@ -446,7 +384,7 @@ ros2 run insta360_ros_driver webcam_equirectangular --ros-args \
 
 ---
 
-### 11. Extrinsic Calibration Tool (`calibrate_cpp.py`)
+### 10. Extrinsic Calibration Tool (`calibrate_cpp.py`)
 Provides an interactive graphical calibration interface to visually tune the extrinsic calibration offsets (`cx_offset`, `cy_offset`, `crop_size`, `translation`, `rotation_deg`) of the projection stitcher.
 
 #### CLI Usage
