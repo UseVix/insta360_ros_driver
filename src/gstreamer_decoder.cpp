@@ -40,11 +40,11 @@ public:
 
         if (use_custom_stream_msg) {
             custom_subscription_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
-                topic_, rclcpp::SensorDataQoS(),
+                topic_, rclcpp::QoS(10),
                 std::bind(&GstreamerDecoderNode::custom_stream_callback, this, std::placeholders::_1));
         } else {
             subscription_ = create_subscription<sensor_msgs::msg::CompressedImage>(
-                topic_, rclcpp::SensorDataQoS(),
+                topic_, rclcpp::QoS(10),
                 std::bind(&GstreamerDecoderNode::compressed_image_callback, this, std::placeholders::_1));
         }
 
