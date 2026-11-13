@@ -20,7 +20,7 @@ public:
 
         declare_parameter("compressed_topic", default_topic);
         declare_parameter("uncompressed_topic", "/equirectangular/image/decoded");
-        declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
+        declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
         topic_ = get_parameter("compressed_topic").as_string();
         uncompressed_topic_ = get_parameter("uncompressed_topic").as_string();
         pipeline_description_ = get_parameter("pipeline").as_string();
@@ -61,12 +61,22 @@ public:
     }
 private:
     void decode_frame(const sensor_msgs::msg::CompressedImage& msg) {
-        if (msg.format != "h264") return;
+        RCLCPP_INFO_ONCE(get_logger(), "Received first compressed frame! format=%s, size=%zu", msg.format.c_str(), msg.data.size());
+        if (msg.format != "h264") {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Unsupported format: %s", msg.format.c_str());
+            return;
+        }
         GstBuffer *buffer = gst_buffer_new_allocate(nullptr, msg.data.size(), nullptr);
         gst_buffer_fill(buffer, 0, msg.data.data(), msg.data.size());
-        if (gst_app_src_push_buffer(source_, buffer) != GST_FLOW_OK) return;
+        if (gst_app_src_push_buffer(source_, buffer) != GST_FLOW_OK) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "gst_app_src_push_buffer failed!");
+            return;
+        }
         GstSample *sample = gst_app_sink_try_pull_sample(sink_, GST_MSECOND * 100);
-        if (!sample) return;
+        if (!sample) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "gst_app_sink_try_pull_sample returned null (no frame ready within 100ms)");
+            return;
+        }
         GstBuffer *decoded = gst_sample_get_buffer(sample);
         GstMapInfo map;
         if (decoded && gst_buffer_map(decoded, &map, GST_MAP_READ)) {
@@ -79,6 +89,7 @@ private:
                 cv::Mat image(height, width, CV_8UC3, map.data);
                 std_msgs::msg::Header header = msg.header;
                 publisher_->publish(*cv_bridge::CvImage(header, "bgr8", image).toImageMsg());
+                RCLCPP_INFO_ONCE(get_logger(), "Successfully decoded and published first frame! %dx%d", width, height);
             }
             gst_buffer_unmap(decoded, &map);
         }
