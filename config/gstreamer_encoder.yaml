@@ -4,5 +4,5 @@ gstreamer_encoder:
     output_topic: /equirectangular/image/h264
     transport: ros
     pipeline: "appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=4000 ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"
-    ros_pipeline: "appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"
+    ros_pipeline: "appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency key-int-max=30 intra-refresh=false ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"
     fps: 30.0

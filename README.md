@@ -36,7 +36,8 @@ For H.264 video encoding and decoding via GStreamer, install the required develo
 ```bash
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-ugly gstreamer1.0-libav
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+  gstreamer1.0-libav gstreamer1.0-tools
 ```
 
 ### MediaSDK Installation (Optional for Hardware Stitching)
@@ -432,12 +433,15 @@ All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` file
 
 | Argument | Default | Description |
 | :--- | :--- | :--- |
-| `media_sdk_stitcher` | `true` | Hardware-accelerated MediaSDK real-time stitcher (`/equirectangular/image`) |
+| `webcam_equirectangular` | `false` | Capture pre-stitched equirectangular frames directly from camera via V4L2 webcam mode (`webcam_equirectangular`). Disables `insta360_ros_driver` and `media_sdk_stitcher`. |
+| `webcam_equirectangular_config` | `config/webcam_equirectangular.yaml` | Path to YAML config for `webcam_equirectangular` |
+| `camera_driver_config` | `config/insta360_ros_driver.yaml` | Path to YAML config for camera driver (`insta360_ros_driver`) |
+| `media_sdk_stitcher` | `true` | Hardware-accelerated MediaSDK real-time stitcher (`/equirectangular/image`). Active only when `webcam_equirectangular` is `false`. |
 | `media_sdk_stitcher_config` | `config/media_sdk_stitcher.yaml` | Path to YAML config for `media_sdk_stitcher` |
 | `gstreamer_encoder` | `true` | GStreamer video encoder and streaming node |
 | `gstreamer_encoder_config` | `config/gstreamer_encoder.yaml` | Path to YAML config for `gstreamer_encoder` |
 | `udp` | `false` | Transmission mode: `false` for ROS topic (`/equirectangular/image/h264`), `true` for direct RTP/UDP |
-| `ffmpeg_decoder` | `false` | FFmpeg decoder for raw dual-fisheye frames (`/dual_fisheye/image`) |
+| `ffmpeg_decoder` | `false` | FFmpeg video decoder node (decodes compressed H.264 streams to raw images) |
 | `ffmpeg_decoder_config` | `config/ffmpeg_decoder.yaml` | Path to YAML config for `ffmpeg_decoder` |
 | `dual_fisheye2equirectangular` | `false` | CPU/OpenCV remap stitcher (`dual_fisheye2equirectangular_cpp`) |
 | `dual_fisheye2equirectangular_config` | `config/dual_fisheye2equirectangular.yaml` | Path to YAML config for OpenCV stitcher |
@@ -448,10 +452,21 @@ All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` file
 | `imu_filter` | `true` | Madgwick IMU orientation filter (`imu_filter_madgwick`) |
 | `imu_config` | `config/imu_filter.yaml` | Path to YAML config for IMU filter |
 
+> [!NOTE]
+> **Camera Driver Mode vs. Webcam Mode:**
+> - **Camera Driver Mode (Default, `webcam_equirectangular:=false`):**
+>   Connects directly to the camera over USB using the Insta360 SDK (`insta360_ros_driver`), publishing raw dual-fisheye compressed stream packets and 6-DOF IMU telemetry. The `media_sdk_stitcher` stitches this stream into `/equirectangular/image`.
+> - **Webcam Mode (`webcam_equirectangular:=true`):**
+>   Captures pre-stitched 2:1 equirectangular frames directly from the camera via standard V4L2/UVC (`webcam_equirectangular`). Setting `webcam_equirectangular:=true` automatically turns off `insta360_ros_driver` and `media_sdk_stitcher` (for the stitcher to activate, both `media_sdk_stitcher:=true` AND `webcam_equirectangular:=false` must be set). Downstream nodes like `gstreamer_encoder` continue to stream the stitched equirectangular output seamlessly.
+
 #### Bringup Examples:
-- **Default (MediaSDK hardware stitching + ROS H.264 streaming):**
+- **Default (Camera USB SDK + MediaSDK hardware stitching + ROS H.264 streaming):**
   ```bash
   ros2 launch insta360_ros_driver bringup.launch.xml
+  ```
+- **Webcam Mode (direct on-camera stitched equirectangular frames via V4L2):**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml webcam_equirectangular:=true
   ```
 - **Direct RTP/UDP streaming:**
   ```bash
@@ -461,7 +476,7 @@ All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` file
   ```bash
   ros2 launch insta360_ros_driver bringup.launch.xml gstreamer_encoder:=false
   ```
-- **Enable raw dual-fisheye image decoding:**
+- **Enable video stream decoding via FFmpeg:**
   ```bash
   ros2 launch insta360_ros_driver bringup.launch.xml ffmpeg_decoder:=true
   ```

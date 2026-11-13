@@ -45,6 +45,17 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
 
+  <!-- GStreamer dependencies -->
+  <build_depend>libgstreamer1.0-dev</build_depend>
+  <build_depend>libgstreamer-plugins-base1.0-dev</build_depend>
+
+  <exec_depend>gstreamer1.0</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-ugly</exec_depend>
+  <exec_depend>gstreamer1.0-libav</exec_depend>
+
   <depend>imu_tools</depend>
 
   <test_depend>ament_lint_auto</test_depend>

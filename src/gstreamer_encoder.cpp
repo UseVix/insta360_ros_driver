@@ -12,7 +12,7 @@ public:
         declare_parameter("output_topic", "/equirectangular/image/h264");
         declare_parameter("transport", "ros");
         declare_parameter("pipeline", std::string("appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=4000 ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"));
-        declare_parameter("ros_pipeline", std::string("appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"));
+        declare_parameter("ros_pipeline", std::string("appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency key-int-max=30 intra-refresh=false ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"));
         declare_parameter("fps", 30.0);
         input_topic_ = get_parameter("input_topic").as_string();
         output_topic_ = get_parameter("output_topic").as_string();

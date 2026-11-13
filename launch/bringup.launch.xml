@@ -1,42 +1,60 @@
 <?xml version="1.0"?>
 <launch>
-    <arg name="dual_fisheye2equirectangular" default="false"/>
-    <arg name="media_sdk_stitcher" default="true"/>
-    <arg name="ffmpeg_decoder" default="false"/>
-    <arg name="gstreamer_encoder" default="true"/>
-    <arg name="udp" default="false"/>
-    <arg name="dual_fisheye2perspective" default="true"/>
-    <arg name="equirectangular2perspective" default="false"/>
-    <arg name="imu_filter" default="true"/>
-    <arg name="dual_fisheye2equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2equirectangular.yaml"/>
-    <arg name="media_sdk_stitcher_config" default="$(find-pkg-share insta360_ros_driver)/config/media_sdk_stitcher.yaml"/>
-    <arg name="ffmpeg_decoder_config" default="$(find-pkg-share insta360_ros_driver)/config/ffmpeg_decoder.yaml"/>
-    <arg name="gstreamer_encoder_config" default="$(find-pkg-share insta360_ros_driver)/config/gstreamer_encoder.yaml"/>
-    <arg name="dual_fisheye2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2perspective.yaml"/>
-    <arg name="equirectangular2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular2perspective.yaml"/>
-    <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
-    <arg name="camera_driver_config" default="$(find-pkg-share insta360_ros_driver)/config/insta360_ros_driver.yaml"/>
-    <!-- Publishes Compressed Stream Data -->
-    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
-        <param from="$(var camera_driver_config)"/>
+    <!-- Switch between USB Driver mode (false, default) and V4L2 Webcam mode (true) -->
+    <arg name="webcam_equirectangular" default="false" description="Capture pre-stitched equirectangular frames directly from camera via V4L2 webcam mode (disables camera driver and stitcher)"/>
+    <arg name="dual_fisheye2equirectangular" default="false" description="Creates Equirectangular Images via CPU/OpenCV"/>
+    <arg name="media_sdk_stitcher" default="true" description="Hardware-accelerated MediaSDK real-time stitcher"/>
+    <arg name="ffmpeg_decoder" default="false" description="FFmpeg decoder for compressed video streams"/>
+    <arg name="gstreamer_encoder" default="true" description="GStreamer video encoder and streaming node"/>
+    <arg name="udp" default="false" description="Transmission mode: false for ROS topic, true for direct RTP/UDP"/>
+    <arg name="dual_fisheye2perspective" default="true" description="Perspective view from dual-fisheye frames"/>
+    <arg name="equirectangular2perspective" default="false" description="Perspective view from equirectangular frames"/>
+    <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
+
+    <!-- Config file paths -->
+    <arg name="webcam_equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/webcam_equirectangular.yaml" description="Path to YAML config for webcam_equirectangular"/>
+    <arg name="camera_driver_config" default="$(find-pkg-share insta360_ros_driver)/config/insta360_ros_driver.yaml" description="Path to YAML config for camera driver"/>
+    <arg name="dual_fisheye2equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2equirectangular.yaml" description="Path to YAML config for OpenCV stitcher"/>
+    <arg name="media_sdk_stitcher_config" default="$(find-pkg-share insta360_ros_driver)/config/media_sdk_stitcher.yaml" description="Path to YAML config for media_sdk_stitcher"/>
+    <arg name="ffmpeg_decoder_config" default="$(find-pkg-share insta360_ros_driver)/config/ffmpeg_decoder.yaml" description="Path to YAML config for ffmpeg_decoder"/>
+    <arg name="gstreamer_encoder_config" default="$(find-pkg-share insta360_ros_driver)/config/gstreamer_encoder.yaml" description="Path to YAML config for gstreamer_encoder"/>
+    <arg name="dual_fisheye2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/dual_fisheye2perspective.yaml" description="Path to YAML config for dual_fisheye2perspective"/>
+    <arg name="equirectangular2perspective_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular2perspective.yaml" description="Path to YAML config for equirectangular2perspective"/>
+    <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml" description="Path to YAML config for IMU filter"/>
+
+    <!-- Webcam Mode: Captures pre-stitched Equirectangular Images directly from Camera via V4L2/UVC -->
+    <node if="$(var webcam_equirectangular)" pkg="insta360_ros_driver" exec="webcam_equirectangular" name="webcam_equirectangular" output="screen">
+        <param from="$(var webcam_equirectangular_config)"/>
     </node>
 
-    <!-- Creates Equirectangular Images via CPU/OpenCV -->
-    <node if="$(var dual_fisheye2equirectangular)" pkg="insta360_ros_driver" exec="dual_fisheye2equirectangular_cpp" name="dual_fisheye2equirectangular_node" output="screen">
-        <param from="$(var dual_fisheye2equirectangular_config)" />
-    </node>
-    <!-- Stitches Equirectangular Images via MediaSDK RealTimeStitcher -->
-    <node if="$(var media_sdk_stitcher)" pkg="insta360_ros_driver" exec="media_sdk_stitcher" name="media_sdk_stitcher" output="screen">
-        <param from="$(var media_sdk_stitcher_config)"/>
-    </node>
-    <!-- Creates Perspective Images from dual-fisheye images -->
-    <node if="$(var dual_fisheye2perspective)" pkg="insta360_ros_driver" exec="dual_fisheye2perspective_cpp" name="dual_fisheye2perspective_node" output="screen">
-        <param from="$(var dual_fisheye2perspective_config)" />
-    </node>
+    <!-- Camera Driver Mode: Active only when webcam_equirectangular is false -->
+    <group unless="$(var webcam_equirectangular)">
+        <!-- Publishes Compressed Stream Data from camera USB SDK -->
+        <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
+            <param from="$(var camera_driver_config)"/>
+        </node>
+
+        <!-- Stitches Equirectangular Images via MediaSDK RealTimeStitcher -->
+        <node if="$(var media_sdk_stitcher)" pkg="insta360_ros_driver" exec="media_sdk_stitcher" name="media_sdk_stitcher" output="screen">
+            <param from="$(var media_sdk_stitcher_config)"/>
+        </node>
+
+        <!-- Creates Equirectangular Images via CPU/OpenCV -->
+        <node if="$(var dual_fisheye2equirectangular)" pkg="insta360_ros_driver" exec="dual_fisheye2equirectangular_cpp" name="dual_fisheye2equirectangular_node" output="screen">
+            <param from="$(var dual_fisheye2equirectangular_config)"/>
+        </node>
+
+        <!-- Creates Perspective Images from dual-fisheye images -->
+        <node if="$(var dual_fisheye2perspective)" pkg="insta360_ros_driver" exec="dual_fisheye2perspective_cpp" name="dual_fisheye2perspective_node" output="screen">
+            <param from="$(var dual_fisheye2perspective_config)"/>
+        </node>
+    </group>
+
     <!-- Creates Perspective Images from equirectangular images -->
     <node if="$(var equirectangular2perspective)" pkg="insta360_ros_driver" exec="equirectangular2perspective_cpp" name="equirectangular2perspective_node" output="screen">
-        <param from="$(var equirectangular2perspective_config)" />
+        <param from="$(var equirectangular2perspective_config)"/>
     </node>
+
     <!-- Applies a Madgwick Filter to the 6-DOF IMU to get Orientation -->
     <node if="$(var imu_filter)" pkg="imu_filter_madgwick" exec="imu_filter_madgwick_node" name="imu_filter" output="log">
         <param from="$(var imu_config)"/>
@@ -48,11 +66,10 @@
     <node if="$(var gstreamer_encoder)" pkg="insta360_ros_driver" exec="gstreamer_encoder" name="gstreamer_encoder" output="screen">
         <param from="$(var gstreamer_encoder_config)"/>
         <param name="transport" value="$(var gstreamer_transport)"/>
-     </node>
-     
+    </node>
 
-     <node if="$(var ffmpeg_decoder)" pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="screen">
-        <param from="$(var ffmpeg_decoder_config)" />
-     </node>
-
+    <!-- Decodes compressed video stream via FFmpeg -->
+    <node if="$(var ffmpeg_decoder)" pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="screen">
+        <param from="$(var ffmpeg_decoder_config)"/>
+    </node>
 </launch>
