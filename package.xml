@@ -55,6 +55,10 @@
   <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
   <exec_depend>gstreamer1.0-plugins-ugly</exec_depend>
   <exec_depend>gstreamer1.0-libav</exec_depend>
+  <!-- NVIDIA hardware acceleration (nvh264enc) for encoding is provided at runtime via gstreamer1.0-plugins-bad.
+       Requires NVIDIA GPU with NVENC support and nvidia-container-toolkit on the Nuvo host (sender side).
+       Start the container with the gpus-all flag for NVIDIA access. -->
+  <!-- Intel VA-API hardware acceleration (vaapih264dec) for decoding is provided by gstreamer1.0-vaapi (receiver side). -->
   <exec_depend>gstreamer1.0-vaapi</exec_depend>
 
   <depend>imu_tools</depend>

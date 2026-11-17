@@ -98,7 +98,9 @@ pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_search_module(SWSCALE REQUIRED libswscale)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0)
-# Hardware acceleration (vaapih264enc, vaapih264dec) is provided at runtime by gstreamer1.0-vaapi
+# NVIDIA hardware acceleration (nvh264enc, nvh264dec) is provided at runtime by gstreamer1.0-plugins-bad.
+# Requires NVIDIA GPU with NVENC/NVDEC support and nvidia-container-toolkit on the host.
+# Run the container with: docker run --gpus all --runtime=nvidia ...
 
 include_directories(
   include
