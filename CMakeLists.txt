@@ -98,6 +98,7 @@ pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_search_module(SWSCALE REQUIRED libswscale)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0)
+# Hardware acceleration (vaapih264enc, vaapih264dec) is provided at runtime by gstreamer1.0-vaapi
 
 include_directories(
   include

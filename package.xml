@@ -55,6 +55,7 @@
   <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
   <exec_depend>gstreamer1.0-plugins-ugly</exec_depend>
   <exec_depend>gstreamer1.0-libav</exec_depend>
+  <exec_depend>gstreamer1.0-vaapi</exec_depend>
 
   <depend>imu_tools</depend>
 
