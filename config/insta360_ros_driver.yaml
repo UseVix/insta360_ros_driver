@@ -4,3 +4,8 @@ insta360_ros_driver:
     imu_topic: imu/data_raw
     exposure_data_topic: /camera/exposure_data
     camera_preview_info_topic: /insta360/camera_preview_info
+    # Latency measurement (camera -> OnVideoData callback); stats are logged periodically
+    measure_latency: false
+    latency_report_period_s: 5.0
+    clock_sync_period_s: 10.0
+    clock_sync_samples: 30

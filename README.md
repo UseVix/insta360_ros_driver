@@ -105,6 +105,25 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml
 ```
 
+#### Latency Measurement
+Set `measure_latency:=true` to log statistics on the path from the camera to the `OnVideoData` callback for each video stream (`stream_index`). In the usual dual-fisheye mode both lenses come in one stream, so only `stream 0` is reported.
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `measure_latency` | `false` | Enable latency instrumentation |
+| `latency_report_period_s` | `5.0` | Interval between statistics reports |
+| `clock_sync_period_s` | `10.0` | Interval between camera/host clock offset re-estimations |
+| `clock_sync_samples` | `30` | `GetCameraMediaTime()` queries per sync (sample with the smallest round trip wins) |
+
+Each report gives min/mean/p50/p99/max for:
+- **cam->callback**: absolute latency, using the estimated clock offset. Its uncertainty is about ±(sync RTT/2 + 1 ms). It also depends on which moment the camera's timestamp marks (exposure or encode), so check it with an optical test.
+- **inter-arrival**: host time between consecutive packets of the same stream (~33 ms at 30 fps).
+
+```bash
+ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
+  --params-file config/insta360_ros_driver.yaml -p measure_latency:=true
+```
+
 ---
 
 ### 2. FFmpeg Video Decoder (`ffmpeg_decoder`)

@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <mutex>
 
 #include <camera/camera.h>
 #include <camera/photography_settings.h>
@@ -16,6 +22,110 @@
 #include "insta360_ros_driver/msg/exposure_data.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
+// Host monotonic time in milliseconds (microsecond resolution).
+static inline double steadyNowMs() {
+    using namespace std::chrono;
+    return duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count() / 1000.0;
+}
+
+// Latency instrumentation for the camera -> OnVideoData path.
+// The hot path (record) only takes a mutex and pushes a couple of doubles; all
+// statistics are computed and logged from the report timer.
+class LatencyMonitor {
+public:
+    // offset_ms = host_steady_ms - camera_media_ms
+    void setClockOffset(double offset_ms, double rtt_ms) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (offset_valid_) {
+            offset_drift_ms_ = offset_ms - offset_ms_;
+        }
+        offset_ms_ = offset_ms;
+        sync_rtt_ms_ = rtt_ms;
+        offset_valid_ = true;
+    }
+
+    void record(int stream_index, int64_t cam_ts_ms, double arrival_ms) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto& s = streams_[stream_index];
+        if (offset_valid_) {
+            s.latency.push_back(arrival_ms - static_cast<double>(cam_ts_ms) - offset_ms_);
+        }
+        if (s.has_last) {
+            s.host_dt.push_back(arrival_ms - s.last_arrival_ms);
+        }
+        s.last_arrival_ms = arrival_ms;
+        s.has_last = true;
+    }
+
+    void report(const rclcpp::Logger& logger) {
+        std::map<int, std::pair<std::vector<double>, std::vector<double>>> windows;
+        double offset, rtt, drift;
+        bool valid;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            for (auto& [idx, s] : streams_) {
+                auto& w = windows[idx];
+                w.first.swap(s.latency);
+                w.second.swap(s.host_dt);
+            }
+            offset = offset_ms_;
+            rtt = sync_rtt_ms_;
+            drift = offset_drift_ms_;
+            valid = offset_valid_;
+        }
+
+        if (valid) {
+            RCLCPP_INFO(logger, "[latency] clock sync: offset=%.3f ms, sync rtt=%.3f ms (uncertainty ~ +/-%.2f ms), drift since prev sync=%+.3f ms",
+                        offset, rtt, rtt / 2.0 + 1.0, drift);
+        } else {
+            RCLCPP_WARN(logger, "[latency] no valid clock sync yet -> absolute latency unavailable");
+        }
+
+        for (auto& [idx, w] : windows) {
+            const Summary lat = summarize(w.first);
+            const Summary dt = summarize(w.second);
+            RCLCPP_INFO(logger,
+                "[latency] stream %d | cam->callback ms: min=%.2f mean=%.2f p50=%.2f p99=%.2f max=%.2f | "
+                "inter-arrival ms: min=%.2f mean=%.2f p50=%.2f p99=%.2f max=%.2f",
+                idx, lat.min, lat.mean, lat.p50, lat.p99, lat.max,
+                dt.min, dt.mean, dt.p50, dt.p99, dt.max);
+        }
+    }
+
+private:
+    struct StreamState {
+        std::vector<double> latency, host_dt;
+        double last_arrival_ms = 0.0;
+        bool has_last = false;
+    };
+    struct Summary { double min = NAN, mean = NAN, p50 = NAN, p99 = NAN, max = NAN; };
+
+    static Summary summarize(std::vector<double>& v) {
+        Summary s;
+        if (v.empty()) return s;
+        std::sort(v.begin(), v.end());
+        double sum = 0.0;
+        for (double x : v) sum += x;
+        auto pct = [&](double p) {
+            size_t i = static_cast<size_t>(std::ceil(p * v.size()));
+            return v[std::min(v.size() - 1, i == 0 ? 0 : i - 1)];
+        };
+        s.min = v.front();
+        s.max = v.back();
+        s.mean = sum / v.size();
+        s.p50 = pct(0.50);
+        s.p99 = pct(0.99);
+        return s;
+    }
+
+    std::mutex mtx_;
+    std::map<int, StreamState> streams_;
+    double offset_ms_ = 0.0;
+    double sync_rtt_ms_ = 0.0;
+    double offset_drift_ms_ = 0.0;
+    bool offset_valid_ = false;
+};
+
 class TestStreamDelegate : public ins_camera::StreamDelegate {
 private:
     std::shared_ptr<rclcpp::Node> node_;
@@ -23,10 +133,13 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_pub_;
     std::string video_format_;
+    std::shared_ptr<LatencyMonitor> latency_;  // null when measurement is disabled
+    std::atomic<bool> first_frame_logged_{false};
 
 public:
-    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264")
-        : node_(node), video_format_(video_format) {
+    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264",
+                       std::shared_ptr<LatencyMonitor> latency = nullptr)
+        : node_(node), video_format_(video_format), latency_(std::move(latency)) {
         if (!node_->has_parameter("compressed_stream_topic")) {
             node_->declare_parameter("compressed_stream_topic", "/dual_fisheye/image/compressed_stream");
         }
@@ -59,7 +172,18 @@ public:
     void OnAudioData(const uint8_t* data, size_t size, int64_t timestamp) override {}
 
     void OnVideoData(const uint8_t* data, size_t size, int64_t timestamp, uint8_t streamType, int stream_index) override {
-        
+        // Take the arrival time before doing any work so it reflects when the SDK handed us the packet.
+        const double arrival_ms = latency_ ? steadyNowMs() : 0.0;
+
+        if (latency_ && !first_frame_logged_.exchange(true)) {
+            const int64_t epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            RCLCPP_INFO(node_->get_logger(),
+                "[latency] first video packet: camera timestamp=%ld ms, host system time=%ld ms "
+                "(if these are far apart the camera timestamp is not Unix epoch time)",
+                static_cast<long>(timestamp), static_cast<long>(epoch_ms));
+        }
+
         if (size > 0) {
             // Publish custom message with explicit stream_type and stream_index
             if (stream_data_pub_) {
@@ -72,6 +196,9 @@ public:
                 stream_msg->data.format = video_format_;
                 stream_msg->data.data.assign(data, data + size);
                 stream_data_pub_->publish(std::move(stream_msg));
+            }
+            if (latency_) {
+                latency_->record(stream_index, timestamp, arrival_ms);
             }
         }
     }
@@ -120,6 +247,49 @@ private:
     std::shared_ptr<ins_camera::Camera> cam;
     std::shared_ptr<rclcpp::Node> node_;
     rclcpp::Publisher<insta360_ros_driver::msg::CameraPreviewInfo>::SharedPtr metadata_pub_;
+
+    // Latency measurement
+    bool measure_latency_ = false;
+    int clock_sync_samples_ = 30;
+    std::shared_ptr<LatencyMonitor> latency_;
+    rclcpp::TimerBase::SharedPtr clock_sync_timer_;
+    rclcpp::TimerBase::SharedPtr latency_report_timer_;
+
+    template <typename T>
+    T declareParam(const std::string& name, const T& default_value) {
+        if (!node_->has_parameter(name)) {
+            node_->declare_parameter<T>(name, default_value);
+        }
+        return node_->get_parameter(name).get_value<T>();
+    }
+
+    // NTP-style offset estimate: query the camera's media clock several times and
+    // keep the sample with the smallest round trip, whose midpoint is the most
+    // accurate estimate of when the camera read its clock.
+    void syncClock() {
+        double best_rtt = std::numeric_limits<double>::infinity();
+        double best_offset = 0.0;
+        int64_t best_cam = 0;
+        for (int i = 0; i < clock_sync_samples_; ++i) {
+            const double t0 = steadyNowMs();
+            const int64_t cam_ms = cam->GetCameraMediaTime();
+            const double t1 = steadyNowMs();
+            if (cam_ms <= 0) continue;
+            const double rtt = t1 - t0;
+            if (rtt < best_rtt) {
+                best_rtt = rtt;
+                best_offset = (t0 + t1) / 2.0 - static_cast<double>(cam_ms);
+                best_cam = cam_ms;
+            }
+        }
+        if (!std::isfinite(best_rtt)) {
+            RCLCPP_WARN(node_->get_logger(), "[latency] clock sync failed: GetCameraMediaTime() returned no valid samples");
+            return;
+        }
+        latency_->setClockOffset(best_offset, best_rtt);
+        RCLCPP_DEBUG(node_->get_logger(), "[latency] clock sync: camera media time=%ld ms, offset=%.3f ms, rtt=%.3f ms",
+                     static_cast<long>(best_cam), best_offset, best_rtt);
+    }
 
 public:
     CameraWrapper(const std::shared_ptr<rclcpp::Node>& node) : node_(node) {}
@@ -177,7 +347,15 @@ public:
         discovery.FreeDeviceDescriptors(list);
 
         std::string video_format = preview.encode_type == ins_camera::VideoEncodeType::H265 ? "h265" : "h264";
-        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_, video_format);
+        measure_latency_ = declareParam<bool>("measure_latency", false);
+        const double report_period_s = declareParam<double>("latency_report_period_s", 5.0);
+        const double sync_period_s = declareParam<double>("clock_sync_period_s", 10.0);
+        clock_sync_samples_ = std::max<int64_t>(1, declareParam<int64_t>("clock_sync_samples", 30));
+        if (measure_latency_) {
+            latency_ = std::make_shared<LatencyMonitor>();
+        }
+
+        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_, video_format, latency_);
         cam->SetStreamDelegate(delegate);
 
         auto start = time(NULL);
@@ -208,6 +386,20 @@ public:
         }
         
         RCLCPP_INFO(node_->get_logger(), "Live streaming started.");
+
+        if (measure_latency_) {
+            // Media time may only advance once streaming is running, so sync after start.
+            syncClock();
+            using namespace std::chrono;
+            clock_sync_timer_ = node_->create_wall_timer(
+                duration_cast<nanoseconds>(duration<double>(sync_period_s)), [this]() { syncClock(); });
+            latency_report_timer_ = node_->create_wall_timer(
+                duration_cast<nanoseconds>(duration<double>(report_period_s)),
+                [this]() { latency_->report(node_->get_logger()); });
+            RCLCPP_INFO(node_->get_logger(),
+                "[latency] measurement enabled: report every %.1f s, clock sync every %.1f s (%d samples)",
+                report_period_s, sync_period_s, clock_sync_samples_);
+        }
         return 0;
     }
 };
