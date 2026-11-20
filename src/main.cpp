@@ -493,6 +493,116 @@ private:
         }
     }
 
+    static bool parseVideoSubMode(const std::string& name, ins_camera::SubVideoMode& out) {
+        static const std::map<std::string, ins_camera::SubVideoMode> table = {
+            {"normal", ins_camera::SubVideoMode::VIDEO_NORMAL},
+            {"bullet_time", ins_camera::SubVideoMode::VIDEO_BULLETTIME},
+            {"timelapse", ins_camera::SubVideoMode::VIDEO_TIMELAPSE},
+            {"hdr", ins_camera::SubVideoMode::VIDEO_HDR},
+            {"timeshift", ins_camera::SubVideoMode::VIDEO_TIMESHIFT},
+            {"super", ins_camera::SubVideoMode::VIDEO_SUPER},
+            {"loop_recording", ins_camera::SubVideoMode::VIDEO_LOOPRECORDING},
+            {"slow_motion", ins_camera::SubVideoMode::VIDEO_SLOW_MOTION},
+            {"selfie", ins_camera::SubVideoMode::VIDEO_SELFIE},
+            {"pure", ins_camera::SubVideoMode::VIDEO_PURE},          // PureVideo (low light)
+            {"liveview", ins_camera::SubVideoMode::VIDEO_LIVEVIEW},  // live-streaming mode (X4/X5)
+            {"dash_cam", ins_camera::SubVideoMode::VIDEO_DASH_CAM},
+            {"ptz", ins_camera::SubVideoMode::VIDEO_PTZ},
+        };
+        auto it = table.find(name);
+        if (it == table.end()) return false;
+        out = it->second;
+        return true;
+    }
+
+    static bool parseWhiteBalance(const std::string& name, ins_camera::PhotographyOptions_WhiteBalance& out) {
+        static const std::map<std::string, ins_camera::PhotographyOptions_WhiteBalance> table = {
+            {"auto", ins_camera::PhotographyOptions_WhiteBalance::WB_AUTO},
+            {"2700k", ins_camera::PhotographyOptions_WhiteBalance::WB_2700K},
+            {"4000k", ins_camera::PhotographyOptions_WhiteBalance::WB_4000K},
+            {"5000k", ins_camera::PhotographyOptions_WhiteBalance::WB_5000K},
+            {"6500k", ins_camera::PhotographyOptions_WhiteBalance::WB_6500K},
+            {"7500k", ins_camera::PhotographyOptions_WhiteBalance::WB_7500K},
+        };
+        auto it = table.find(name);
+        if (it == table.end()) return false;
+        out = it->second;
+        return true;
+    }
+
+    // Selects the camera's video sub-mode (the mode chosen on the camera screen). The SDK has no getter,
+    // so the camera keeps whatever was set last; "unchanged" leaves it alone.
+    bool applyVideoSubMode() {
+        const std::string name = declareParam<std::string>("video_sub_mode", "unchanged");
+        if (name == "unchanged") return true;
+        ins_camera::SubVideoMode mode;
+        if (!parseVideoSubMode(name, mode)) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "Unknown video_sub_mode '%s' (use unchanged|normal|hdr|pure|liveview|loop_recording|timelapse|timeshift|"
+                "bullet_time|slow_motion|selfie|super|dash_cam|ptz)", name.c_str());
+            return false;
+        }
+        if (cam->SetVideoSubMode(mode)) {
+            RCLCPP_INFO(node_->get_logger(), "Video sub-mode set: %s", name.c_str());
+        } else {
+            RCLCPP_WARN(node_->get_logger(), "SetVideoSubMode(%s) failed", name.c_str());
+        }
+        return true;
+    }
+
+    // Contrast / saturation / brightness / sharpness / white balance of the live-stream mode.
+    // Only applied when apply_image_settings is true; the defaults are the SDK's documented defaults.
+    bool applyImageSettings() {
+        const bool apply = declareParam<bool>("apply_image_settings", false);
+        const int64_t contrast = declareParam<int64_t>("image_contrast", 64);
+        const int64_t saturation = declareParam<int64_t>("image_saturation", 64);
+        const int64_t brightness = declareParam<int64_t>("image_brightness", 0);
+        const int64_t sharpness = declareParam<int64_t>("image_sharpness", 3);
+        const std::string wb_name = declareParam<std::string>("image_white_balance", "auto");
+        if (!apply) return true;
+
+        ins_camera::PhotographyOptions_WhiteBalance wb;
+        if (!parseWhiteBalance(wb_name, wb)) {
+            RCLCPP_ERROR(node_->get_logger(), "Unknown image_white_balance '%s' (use auto|2700k|4000k|5000k|6500k|7500k)",
+                         wb_name.c_str());
+            return false;
+        }
+        if (contrast < 0 || contrast > 256 || saturation < 0 || saturation > 256 || brightness < -256 ||
+            brightness > 256 || sharpness < 0 || sharpness > 6) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "Image setting out of range (contrast 0..256, saturation 0..256, brightness -256..256, sharpness 0..6)");
+            return false;
+        }
+        using CS = ins_camera::CaptureSettings;
+        auto settings = std::make_shared<CS>();
+        settings->SetValue(CS::CaptureSettings_Contrast, static_cast<int32_t>(contrast));
+        settings->SetValue(CS::CaptureSettings_Saturation, static_cast<int32_t>(saturation));
+        settings->SetValue(CS::CaptureSettings_Brightness, static_cast<int32_t>(brightness));
+        settings->SetValue(CS::CaptureSettings_Sharpness, static_cast<int32_t>(sharpness));
+        settings->SetWhiteBalance(wb);
+        if (!cam->SetCaptureSettings(ins_camera::CameraFunctionMode::FUNCTION_MODE_LIVE_STREAM, settings)) {
+            RCLCPP_WARN(node_->get_logger(),
+                "SetCaptureSettings(LIVE_STREAM) failed (contrast=%ld saturation=%ld brightness=%ld sharpness=%ld wb=%s)",
+                static_cast<long>(contrast), static_cast<long>(saturation), static_cast<long>(brightness),
+                static_cast<long>(sharpness), wb_name.c_str());
+            return true;
+        }
+        auto applied = cam->GetCaptureSettings(ins_camera::CameraFunctionMode::FUNCTION_MODE_LIVE_STREAM);
+        if (applied) {
+            RCLCPP_INFO(node_->get_logger(),
+                "Image settings applied: requested contrast=%ld saturation=%ld brightness=%ld sharpness=%ld wb=%s | "
+                "camera reports contrast=%d saturation=%d brightness=%d sharpness=%d wb=%d",
+                static_cast<long>(contrast), static_cast<long>(saturation), static_cast<long>(brightness),
+                static_cast<long>(sharpness), wb_name.c_str(),
+                applied->GetIntValue(CS::CaptureSettings_Contrast), applied->GetIntValue(CS::CaptureSettings_Saturation),
+                applied->GetIntValue(CS::CaptureSettings_Brightness), applied->GetIntValue(CS::CaptureSettings_Sharpness),
+                static_cast<int>(applied->WhiteBalance()));
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "Image settings applied");
+        }
+        return true;
+    }
+
     template <typename T>
     T declareParam(const std::string& name, const T& default_value) {
         if (!node_->has_parameter(name)) {
@@ -585,6 +695,8 @@ public:
         discovery.FreeDeviceDescriptors(list);
 
         std::string video_format = preview.encode_type == ins_camera::VideoEncodeType::H265 ? "h265" : "h264";
+        // The codec is chosen on the camera's menu; the SDK can only read it.
+        RCLCPP_INFO(node_->get_logger(), "Camera encode type: %s", video_format.c_str());
         measure_latency_ = declareParam<bool>("measure_latency", false);
         const double report_period_s = declareParam<double>("latency_report_period_s", 5.0);
         const double sync_period_s = declareParam<double>("clock_sync_period_s", 10.0);
@@ -643,7 +755,11 @@ public:
         RCLCPP_INFO(node_->get_logger(), "Stopped residual live streaming. Waiting 5 seconds for stitcher to subscribe and initialize itself with config and for USB driver to settle");
         rclcpp::sleep_for(std::chrono::seconds(5));
 
-        // Exposure must be set while streaming is stopped so it is in effect from the first frame.
+        // Mode, exposure and image settings are applied while streaming is stopped so they are in
+        // effect from the first frame.
+        if (!applyVideoSubMode() || !applyImageSettings()) {
+            return -1;
+        }
         applyExposureSettings();
 
         if (!cam->StartLiveStreaming(param)) {

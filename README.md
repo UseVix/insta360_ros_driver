@@ -105,7 +105,7 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml
 ```
 
-#### Stream & Exposure Parameters
+#### Stream, Exposure, Mode & Image Parameters
 | Parameter | Default | Description |
 | :--- | :--- | :--- |
 | `video_resolution` | `1920x960p30` | `3840x1920p30`, `2560x1280p30`, `2304x1152p30`, `1920x960p30`, `1440x720p30`, `960x480p30`, `3840x1920p60`, `2560x1280p60` (support varies by model/firmware) |
@@ -115,6 +115,12 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
 | `iso` | `0` | ISO for `manual`/`iso_priority` (`0` = do not set) |
 | `ev_bias` | `0` | Exposure compensation |
 | `video_iso_top_limit` | `0` | Upper ISO limit for auto ISO (`0` = do not set) |
+| `video_sub_mode` | `unchanged` | Camera video mode: `unchanged`, `normal`, `hdr`, `pure`, `liveview`, `loop_recording`, `timelapse`, `timeshift`, `bullet_time`, `slow_motion`, `selfie`, `super`, `dash_cam`, `ptz`. The camera keeps it after the driver exits |
+| `apply_image_settings` | `false` | Apply the `image_*` settings below to the live stream |
+| `image_contrast` / `image_saturation` | `64` | 0..256 |
+| `image_brightness` | `0` | -256..256 |
+| `image_sharpness` | `3` | 0..6 |
+| `image_white_balance` | `auto` | `auto`, `2700k`, `4000k`, `5000k`, `6500k`, `7500k` |
 
 Exposure is applied to the live-stream mode before streaming starts. The applied values and the first exposure time the camera reports are logged; `/camera/exposure_data` shows the exposure time continuously.
 
@@ -159,19 +165,34 @@ With `measure_latency:=true`, a `[stream]` line with all three is logged each re
 Encoders produce less than the requested bitrate on easy-to-compress scenes, so `BELOW` alone does not mean the setting is ignored. `ABOVE` does. The reliable test is comparing runs with different requested bitrates, which the sweep below does.
 
 #### Latency Sweep
-`latency_sweep.py` runs the driver once per combination of resolution × bitrate × exposure. For each run it discards the first report window, averages the next ones, and stops the driver with SIGINT before starting the next. Results go to `<out>.csv` (one row per configuration), `<out>_windows.csv` (one row per report window), `<out>_format_check.txt` and `<out>_logs/` (full driver log of each run). Configurations already in the CSV are skipped, so re-running the same command resumes an interrupted sweep. If the camera refuses a resolution, the rest of that resolution's combinations are skipped.
+`latency_sweep.py` finds out which camera settings affect latency, then measures every combination of the ones that do. The settings it tests (the first value of each list is the baseline):
+
+| Setting | Option | Default values |
+| :--- | :--- | :--- |
+| Exposure | `--exposures` | `auto shutter:30 shutter:60 shutter:100 shutter:120 shutter:240 shutter:500 shutter:1000` |
+| Video sub-mode | `--sub-modes` | `normal hdr pure liveview` |
+| Codec | `--codecs` | `h264 h265` (`current` = keep the camera's codec, no prompts) |
+| Contrast / saturation | `--contrast` / `--saturation` | `64 0 256` |
+| Brightness | `--brightness` | `0 -256 256` |
+| Sharpness | `--sharpness` | `3 0 6` |
+| White balance | `--white-balance` | `auto 2700k 7500k` |
+| Resolution / bitrate | `--resolutions` / `--bitrates` | `1920x960p30` / `524288` (one value each, so not tested) |
+
+1. **Screening** (24 runs, ~17 min with the defaults). Each setting is changed on its own while everything else stays at baseline. The baseline runs 3 times, spread over the phase, to measure run-to-run variation. A setting has an effect if it moves mean latency by more than the larger of 10 ms (`--min-effect-ms`) or 3× the baseline's variation (`--noise-factor`), or changes the frame rate by more than 10 % (`--fps-effect`). Values the camera refuses (it won't start, or it rejects the setting) are left out.
+2. **Full sweep:** every combination of the settings that had an effect. All other settings stay at baseline, and runs already done in screening are reused. If the full sweep would need more than `--max-full-runs` runs (default 300), it doesn't start; narrow the value lists or raise the limit.
+
+The codec can't be switched through the SDK. When a run needs the other codec, the script asks you to change it on the camera's menu and press Enter (`s` skips that codec, `q` stops), then checks the driver log to confirm the switch. Runs are grouped so you switch as few times as possible. The camera's codec at the start becomes the baseline. Without a terminal (e.g. stdin closed), that codec is marked unavailable.
+
+When the sweep finishes, the camera is put back to the baseline sub-mode and image settings (`--no-restore` to skip).
 
 ```bash
-# full default grid: 8 resolutions x 4 bitrates x 8 exposures = 256 runs, about 3 hours
-ros2 run insta360_ros_driver latency_sweep.py --out ~/latency_sweep
-# smaller sweep; --dry-run lists the runs and the estimated time
-ros2 run insta360_ros_driver latency_sweep.py --out ~/latency_sweep \
-  --resolutions 1920x960p30 1440x720p30 2560x1280p60 --bitrates 524288 4194304 \
-  --exposures auto shutter:60 shutter:120 shutter:240 --dry-run
+ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --dry-run          # plan and time estimate
+ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep                    # screening + full sweep
+ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --phase screen     # screening only
+ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --summary-only     # print the report again
 ```
-Every run also records the stream format check (`actual_resolution`, `actual_fps`, `actual_bitrate` and their `*_check` columns). At the end, the script prints whether the camera honours each setting and writes this to `<out>_format_check.txt`. For bitrate it checks whether the received bitrate rises with the requested one across runs. Use `--summary-only` to print it again for an existing CSV.
 
-Exposure specs: `auto`, `full_auto`, `adaptive`, `unchanged`, `shutter:<N>` (shutter priority, 1/N s), `manual:<N>` (with `--iso`). Timing options: `--reports` (kept windows, default 4), `--warmup-reports` (default 1), `--report-period` (default 5 s). Key CSV columns: `lat_mean_ms`, `lat_p50_ms`, `lat_p99_max_ms`, `fps_est` (from inter-arrival time) and `measured_exposure_s` (what the camera actually used).
+Outputs: `<out>.csv` (one row per run, with the phase, every setting, latency and the received stream format), `<out>_windows.csv` (one row per report window), `<out>_report.txt` (screening verdicts, lowest-latency configurations, stream format check) and `<out>_logs/`. Re-running the same command resumes; runs that did not finish cleanly are retried. Ctrl+C once stops after the current run, twice stops immediately.
 
 ---
 

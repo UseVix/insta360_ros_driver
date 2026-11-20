@@ -17,6 +17,15 @@ insta360_ros_driver:
     iso: 0                           # 0 = auto (used in manual / iso_priority modes)
     ev_bias: 0
     video_iso_top_limit: 0           # 0 = do not set; caps auto ISO (noise) when the shutter is short
+    # Camera video mode (persists on the camera): unchanged | normal | hdr | pure | liveview | loop_recording | ...
+    video_sub_mode: unchanged
+    # Image settings of the live stream (only applied when apply_image_settings is true)
+    apply_image_settings: false
+    image_contrast: 64               # 0..256
+    image_saturation: 64             # 0..256
+    image_brightness: 0              # -256..256
+    image_sharpness: 3               # 0..6
+    image_white_balance: auto        # auto | 2700k | 4000k | 5000k | 6500k | 7500k
     # Stream format check: logs the resolution from the stream's SPS once; with measure_latency also
     # reports received fps / bitrate against the request every latency_report_period_s
     check_stream_format: true
