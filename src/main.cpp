@@ -135,6 +135,8 @@ private:
     std::string video_format_;
     std::shared_ptr<LatencyMonitor> latency_;  // null when measurement is disabled
     std::atomic<bool> first_frame_logged_{false};
+    std::atomic<bool> first_exposure_logged_{false};
+    std::atomic<double> last_exposure_time_s_{NAN};
 
 public:
     TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264",
@@ -232,7 +234,16 @@ public:
         }
     }
 
+    // Most recent exposure time reported by the camera, in seconds (NaN until the first report).
+    double lastExposureTime() const { return last_exposure_time_s_.load(); }
+
     void OnExposureData(const ins_camera::ExposureData& data) override {
+        last_exposure_time_s_.store(data.exposure_time);
+        if (!first_exposure_logged_.exchange(true)) {
+            // Confirms whether the requested shutter speed was actually applied by the camera.
+            RCLCPP_INFO(node_->get_logger(), "First exposure report from camera: exposure_time=%.6f s (1/%.0f s)",
+                        data.exposure_time, data.exposure_time > 0.0 ? 1.0 / data.exposure_time : 0.0);
+        }
         if (exposure_pub_) {
             auto msg = std::make_unique<insta360_ros_driver::msg::ExposureData>();
             msg->timestamp = data.timestamp;
@@ -252,8 +263,89 @@ private:
     bool measure_latency_ = false;
     int clock_sync_samples_ = 30;
     std::shared_ptr<LatencyMonitor> latency_;
+    std::shared_ptr<TestStreamDelegate> delegate_;
     rclcpp::TimerBase::SharedPtr clock_sync_timer_;
     rclcpp::TimerBase::SharedPtr latency_report_timer_;
+
+    // Live-stream resolutions that can be selected with the `video_resolution` parameter.
+    // Not every model/firmware accepts every entry; StartLiveStreaming() fails if it does not.
+    static bool parseResolution(const std::string& name, ins_camera::VideoResolution& out) {
+        static const std::map<std::string, ins_camera::VideoResolution> table = {
+            {"3840x1920p30", ins_camera::VideoResolution::RES_3840_1920P30},
+            {"2560x1280p30", ins_camera::VideoResolution::RES_2560_1280P30},
+            {"2304x1152p30", ins_camera::VideoResolution::RES_1152_1152P30},
+            {"1920x960p30",  ins_camera::VideoResolution::RES_1920_960P30},
+            {"1440x720p30",  ins_camera::VideoResolution::RES_1440_720P30},
+            {"960x480p30",   ins_camera::VideoResolution::RES_960_480P30},
+            {"3840x1920p60", ins_camera::VideoResolution::RES_3840_1920P60},
+            {"2560x1280p60", ins_camera::VideoResolution::RES_2560_1280P60},
+        };
+        auto it = table.find(name);
+        if (it == table.end()) return false;
+        out = it->second;
+        return true;
+    }
+
+    static bool parseExposureMode(const std::string& name, ins_camera::PhotographyOptions_ExposureMode& out) {
+        static const std::map<std::string, ins_camera::PhotographyOptions_ExposureMode> table = {
+            {"auto", ins_camera::PhotographyOptions_ExposureMode::AUTO},
+            {"iso_priority", ins_camera::PhotographyOptions_ExposureMode::ISO_PRIORITY},
+            {"shutter_priority", ins_camera::PhotographyOptions_ExposureMode::SHUTTER_PRIORITY},
+            {"manual", ins_camera::PhotographyOptions_ExposureMode::MANUAL},
+            {"adaptive", ins_camera::PhotographyOptions_ExposureMode::ADAPTIVE},
+            {"full_auto", ins_camera::PhotographyOptions_ExposureMode::FULL_AUTO},
+        };
+        auto it = table.find(name);
+        if (it == table.end()) return false;
+        out = it->second;
+        return true;
+    }
+
+    // Applies exposure parameters to the live-stream function mode. A short, fixed shutter
+    // stops auto-exposure from stretching the exposure (and dropping the frame rate) in low light.
+    void applyExposureSettings() {
+        const std::string mode_name = declareParam<std::string>("exposure_mode", "shutter_priority");
+        const int64_t shutter_den = declareParam<int64_t>("shutter_speed_denominator", 120);
+        const int64_t iso = declareParam<int64_t>("iso", 0);
+        const int64_t ev_bias = declareParam<int64_t>("ev_bias", 0);
+        const int64_t iso_top_limit = declareParam<int64_t>("video_iso_top_limit", 0);
+
+        if (mode_name == "unchanged") {
+            RCLCPP_INFO(node_->get_logger(), "exposure_mode=unchanged -> leaving camera exposure settings as they are");
+            return;
+        }
+        ins_camera::PhotographyOptions_ExposureMode mode;
+        if (!parseExposureMode(mode_name, mode)) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "Unknown exposure_mode '%s' (use unchanged|auto|shutter_priority|iso_priority|manual|adaptive|full_auto); "
+                "leaving exposure unchanged", mode_name.c_str());
+            return;
+        }
+
+        auto settings = std::make_shared<ins_camera::ExposureSettings>();
+        settings->SetExposureMode(mode);
+        settings->SetEVBias(static_cast<int32_t>(ev_bias));
+        if (shutter_den > 0) settings->SetShutterSpeed(1.0 / static_cast<double>(shutter_den));
+        if (iso > 0) settings->SetIso(static_cast<int32_t>(iso));
+        if (iso_top_limit > 0) settings->SetVideoISOTopLimit(static_cast<int32_t>(iso_top_limit));
+
+        const bool ok = cam->SetExposureSettings(ins_camera::CameraFunctionMode::FUNCTION_MODE_LIVE_STREAM, settings);
+        if (!ok) {
+            RCLCPP_WARN(node_->get_logger(), "SetExposureSettings(LIVE_STREAM) failed (mode=%s, shutter=1/%ld s, iso=%ld)",
+                        mode_name.c_str(), static_cast<long>(shutter_den), static_cast<long>(iso));
+            return;
+        }
+        auto applied = cam->GetExposureSettings(ins_camera::CameraFunctionMode::FUNCTION_MODE_LIVE_STREAM);
+        if (applied) {
+            RCLCPP_INFO(node_->get_logger(),
+                "Exposure settings applied: requested mode=%s shutter=1/%ld s iso=%ld ev=%ld | camera reports mode=%d shutter=%.6f s iso=%d ev=%d",
+                mode_name.c_str(), static_cast<long>(shutter_den), static_cast<long>(iso), static_cast<long>(ev_bias),
+                static_cast<int>(applied->ExposureMode()), applied->ShutterSpeed(), applied->Iso(), applied->EVBias());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "Exposure settings applied: mode=%s shutter=1/%ld s",
+                        mode_name.c_str(), static_cast<long>(shutter_den));
+        }
+    }
 
     template <typename T>
     T declareParam(const std::string& name, const T& default_value) {
@@ -355,7 +447,8 @@ public:
             latency_ = std::make_shared<LatencyMonitor>();
         }
 
-        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_, video_format, latency_);
+        delegate_ = std::make_shared<TestStreamDelegate>(node_, video_format, latency_);
+        std::shared_ptr<ins_camera::StreamDelegate> delegate = delegate_;
         cam->SetStreamDelegate(delegate);
 
         auto start = time(NULL);
@@ -364,21 +457,29 @@ public:
         uint32_t offset_time = 0; //no offset from UTC
 
         cam->SyncLocalTimeToCamera(utc_time,offset_time);       
+        const std::string resolution_name = declareParam<std::string>("video_resolution", "1920x960p30");
+        const int64_t video_bitrate = declareParam<int64_t>("video_bitrate", 1024 * 1024 / 2);
+
         ins_camera::LiveStreamParam param;
-        param.video_resolution = ins_camera::VideoResolution::RES_1920_960P30; //Change this line to edit the resolution
-        //Possible resolutions (results may vary per model) are:
-        //RES_3840_1920P30
-        //RES_2560_1280P30
-        //RES_1152_1152P30 (this will give 2304 x 1152 at 30 FPS)
-        //RES_1920_960P30  
+        if (!parseResolution(resolution_name, param.video_resolution)) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "Unknown video_resolution '%s' (use 3840x1920p30|2560x1280p30|2304x1152p30|1920x960p30|1440x720p30|960x480p30|"
+                "3840x1920p60|2560x1280p60)", resolution_name.c_str());
+            return -1;
+        }
         param.lrv_video_resulution = ins_camera::VideoResolution::RES_1440_720P30;
-        param.video_bitrate = 1024 * 1024 / 2;
+        param.video_bitrate = static_cast<uint32_t>(std::max<int64_t>(1, video_bitrate));
         param.enable_audio = false;
         param.using_lrv = false;
+        RCLCPP_INFO(node_->get_logger(), "Live stream: resolution=%s bitrate=%u bit/s",
+                    resolution_name.c_str(), param.video_bitrate);
 
         cam->StopLiveStreaming();
         RCLCPP_INFO(node_->get_logger(), "Stopped residual live streaming. Waiting 5 seconds for stitcher to subscribe and initialize itself with config and for USB driver to settle");
         rclcpp::sleep_for(std::chrono::seconds(5));
+
+        // Exposure must be set while streaming is stopped so it is in effect from the first frame.
+        applyExposureSettings();
 
         if (!cam->StartLiveStreaming(param)) {
             RCLCPP_ERROR(node_->get_logger(), "Failed to start live streaming.");
@@ -395,7 +496,13 @@ public:
                 duration_cast<nanoseconds>(duration<double>(sync_period_s)), [this]() { syncClock(); });
             latency_report_timer_ = node_->create_wall_timer(
                 duration_cast<nanoseconds>(duration<double>(report_period_s)),
-                [this]() { latency_->report(node_->get_logger()); });
+                [this]() {
+                    latency_->report(node_->get_logger());
+                    const double exp_s = delegate_->lastExposureTime();
+                    if (std::isfinite(exp_s) && exp_s > 0.0) {
+                        RCLCPP_INFO(node_->get_logger(), "[latency] current exposure_time=%.6f s (1/%.0f s)", exp_s, 1.0 / exp_s);
+                    }
+                });
             RCLCPP_INFO(node_->get_logger(),
                 "[latency] measurement enabled: report every %.1f s, clock sync every %.1f s (%d samples)",
                 report_period_s, sync_period_s, clock_sync_samples_);

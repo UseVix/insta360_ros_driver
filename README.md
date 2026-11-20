@@ -13,7 +13,7 @@ A ROS driver for the Insta360 cameras. This driver is tested on Ubuntu 22.04 wit
 - 2304 x 1152
 - 1920 x 960
 
-You can change [this line](https://github.com/ai4ce/insta360_ros_driver/blob/79588d9e0e9d029c3371d4095ea718daaf1e06fb/src/main.cpp#L126) to edit the resolution.
+Set the `video_resolution` parameter of the camera driver (see `config/insta360_ros_driver.yaml`) to change the resolution.
 
 ## Installation
 To use this driver, you need to first have Insta360 SDK. Please apply for the SDK from the [Insta360 website](https://www.insta360.com/sdk/home). 
@@ -105,6 +105,21 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml
 ```
 
+#### Stream & Exposure Parameters
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `video_resolution` | `1920x960p30` | `3840x1920p30`, `2560x1280p30`, `2304x1152p30`, `1920x960p30`, `1440x720p30`, `960x480p30`, `3840x1920p60`, `2560x1280p60` (support varies by model/firmware) |
+| `video_bitrate` | `524288` | Live stream bitrate in bit/s |
+| `exposure_mode` | `shutter_priority` | `unchanged`, `auto`, `shutter_priority`, `iso_priority`, `manual`, `adaptive`, `full_auto` |
+| `shutter_speed_denominator` | `120` | Shutter = 1/N s (`0` = do not set). Use `100` under 50 Hz lighting to avoid banding |
+| `iso` | `0` | ISO for `manual`/`iso_priority` (`0` = do not set) |
+| `ev_bias` | `0` | Exposure compensation |
+| `video_iso_top_limit` | `0` | Upper ISO limit for auto ISO (`0` = do not set) |
+
+Exposure is applied to the live-stream mode before streaming starts. The applied values and the first exposure time the camera reports are logged; `/camera/exposure_data` shows the exposure time continuously.
+
+A fixed short shutter mostly matters in low light: the exposure time is bounded by the frame period (33 ms at 30 fps), so it saves at most a few tens of milliseconds, but it prevents auto-exposure from lowering the frame rate in dim scenes, which adds much more latency.
+
 #### Latency Measurement
 Set `measure_latency:=true` to log statistics on the path from the camera to the `OnVideoData` callback for each video stream (`stream_index`). In the usual dual-fisheye mode both lenses come in one stream, so only `stream 0` is reported.
 
@@ -123,6 +138,19 @@ Each report gives min/mean/p50/p99/max for:
 ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml -p measure_latency:=true
 ```
+
+#### Latency Sweep
+`latency_sweep.py` runs the driver once per combination of resolution × bitrate × exposure. For each run it discards the first report window, averages the next ones, and stops the driver with SIGINT before starting the next. Results go to `<out>.csv` (one row per configuration), `<out>_windows.csv` (one row per report window) and `<out>_logs/` (full driver log of each run). Configurations already in the CSV are skipped, so re-running the same command resumes an interrupted sweep. If the camera refuses a resolution, the rest of that resolution's combinations are skipped.
+
+```bash
+# full default grid: 8 resolutions x 4 bitrates x 8 exposures = 256 runs, about 3 hours
+ros2 run insta360_ros_driver latency_sweep.py --out ~/latency_sweep
+# smaller sweep; --dry-run lists the runs and the estimated time
+ros2 run insta360_ros_driver latency_sweep.py --out ~/latency_sweep \
+  --resolutions 1920x960p30 1440x720p30 2560x1280p60 --bitrates 524288 4194304 \
+  --exposures auto shutter:60 shutter:120 shutter:240 --dry-run
+```
+Exposure specs: `auto`, `full_auto`, `adaptive`, `unchanged`, `shutter:<N>` (shutter priority, 1/N s), `manual:<N>` (with `--iso`). Timing options: `--reports` (kept windows, default 4), `--warmup-reports` (default 1), `--report-period` (default 5 s). Key CSV columns: `lat_mean_ms`, `lat_p50_ms`, `lat_p99_max_ms`, `fps_est` (from inter-arrival time) and `measured_exposure_s` (what the camera actually used).
 
 ---
 

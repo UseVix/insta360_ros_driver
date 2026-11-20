@@ -4,6 +4,19 @@ insta360_ros_driver:
     imu_topic: imu/data_raw
     exposure_data_topic: /camera/exposure_data
     camera_preview_info_topic: /insta360/camera_preview_info
+    # Live stream format
+    # 3840x1920p30 | 2560x1280p30 | 2304x1152p30 | 1920x960p30 | 1440x720p30 | 960x480p30 | 3840x1920p60 | 2560x1280p60
+    # (not every model/firmware accepts every entry; the driver exits if StartLiveStreaming fails)
+    video_resolution: 1920x960p30
+    video_bitrate: 524288            # bit/s
+    # Exposure (applied to the live-stream mode before streaming starts)
+    # exposure_mode: unchanged | auto | shutter_priority | iso_priority | manual | adaptive | full_auto
+    # A short, fixed shutter keeps auto-exposure from lengthening exposure / dropping fps in low light.
+    exposure_mode: shutter_priority
+    shutter_speed_denominator: 120   # shutter = 1/N s (0 = do not set). Use 100 under 50 Hz lighting, 120 under 60 Hz, to avoid banding
+    iso: 0                           # 0 = auto (used in manual / iso_priority modes)
+    ev_bias: 0
+    video_iso_top_limit: 0           # 0 = do not set; caps auto ISO (noise) when the shutter is short
     # Latency measurement (camera -> OnVideoData callback); stats are logged periodically
     measure_latency: false
     latency_report_period_s: 5.0
