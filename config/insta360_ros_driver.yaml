@@ -17,6 +17,11 @@ insta360_ros_driver:
     iso: 0                           # 0 = auto (used in manual / iso_priority modes)
     ev_bias: 0
     video_iso_top_limit: 0           # 0 = do not set; caps auto ISO (noise) when the shutter is short
+    # Stream format check: logs the resolution from the stream's SPS once; with measure_latency also
+    # reports received fps / bitrate against the request every latency_report_period_s
+    check_stream_format: true
+    stream_check_fps_tolerance: 0.10      # fps MATCH within +/-10 % of requested
+    stream_check_bitrate_tolerance: 0.50  # bitrate MATCH within +/-50 %, else BELOW / ABOVE
     # Latency measurement (camera -> OnVideoData callback); stats are logged periodically
     measure_latency: false
     latency_report_period_s: 5.0

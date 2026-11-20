@@ -139,8 +139,27 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml -p measure_latency:=true
 ```
 
+#### Stream Format Check
+The driver checks whether the incoming stream matches the requested `video_resolution` and `video_bitrate`. It is on by default (`check_stream_format`).
+- **Resolution:** read from the SPS inside the H.264/H.265 bitstream, logged once when streaming starts and again if it changes. A mismatch is logged as a warning.
+- **Frame rate:** measured from the camera timestamps of consecutive frames.
+- **Bitrate:** measured from the bytes received per second of camera time.
+
+With `measure_latency:=true`, a `[stream]` line with all three is logged each report period:
+```
+[stream] stream 0 | resolution=1920x960 requested=1920x960 MATCH | fps=29.98 requested=30.00 MATCH | bitrate=530123 requested=524288 ratio=1.01 MATCH | sps_fps=30.00 frames=150 keyframes=5 max_packet_bytes=45123
+```
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `check_stream_format` | `true` | Enable the check |
+| `stream_check_fps_tolerance` | `0.10` | fps is `MATCH` within this fraction of the request |
+| `stream_check_bitrate_tolerance` | `0.50` | bitrate is `MATCH` within this fraction, otherwise `BELOW`/`ABOVE` |
+
+Encoders produce less than the requested bitrate on easy-to-compress scenes, so `BELOW` alone does not mean the setting is ignored. `ABOVE` does. The reliable test is comparing runs with different requested bitrates, which the sweep below does.
+
 #### Latency Sweep
-`latency_sweep.py` runs the driver once per combination of resolution × bitrate × exposure. For each run it discards the first report window, averages the next ones, and stops the driver with SIGINT before starting the next. Results go to `<out>.csv` (one row per configuration), `<out>_windows.csv` (one row per report window) and `<out>_logs/` (full driver log of each run). Configurations already in the CSV are skipped, so re-running the same command resumes an interrupted sweep. If the camera refuses a resolution, the rest of that resolution's combinations are skipped.
+`latency_sweep.py` runs the driver once per combination of resolution × bitrate × exposure. For each run it discards the first report window, averages the next ones, and stops the driver with SIGINT before starting the next. Results go to `<out>.csv` (one row per configuration), `<out>_windows.csv` (one row per report window), `<out>_format_check.txt` and `<out>_logs/` (full driver log of each run). Configurations already in the CSV are skipped, so re-running the same command resumes an interrupted sweep. If the camera refuses a resolution, the rest of that resolution's combinations are skipped.
 
 ```bash
 # full default grid: 8 resolutions x 4 bitrates x 8 exposures = 256 runs, about 3 hours
@@ -150,6 +169,8 @@ ros2 run insta360_ros_driver latency_sweep.py --out ~/latency_sweep \
   --resolutions 1920x960p30 1440x720p30 2560x1280p60 --bitrates 524288 4194304 \
   --exposures auto shutter:60 shutter:120 shutter:240 --dry-run
 ```
+Every run also records the stream format check (`actual_resolution`, `actual_fps`, `actual_bitrate` and their `*_check` columns). At the end, the script prints whether the camera honours each setting and writes this to `<out>_format_check.txt`. For bitrate it checks whether the received bitrate rises with the requested one across runs. Use `--summary-only` to print it again for an existing CSV.
+
 Exposure specs: `auto`, `full_auto`, `adaptive`, `unchanged`, `shutter:<N>` (shutter priority, 1/N s), `manual:<N>` (with `--iso`). Timing options: `--reports` (kept windows, default 4), `--warmup-reports` (default 1), `--report-period` (default 5 s). Key CSV columns: `lat_mean_ms`, `lat_p50_ms`, `lat_p99_max_ms`, `fps_est` (from inter-arrival time) and `measured_exposure_s` (what the camera actually used).
 
 ---
