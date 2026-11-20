@@ -17,8 +17,9 @@ Phase 2, full sweep: every combination of the axes that had an effect (with thei
   supported values); all other axes stay at baseline. Runs already done in
   screening are reused.
 
-The codec cannot be set through the SDK, only on the camera's menu. When a run needs
-the other codec, the script asks you to switch it on the camera and press Enter
+The codec cannot be set through the SDK, only on the camera's menu. Codecs are tested in
+the order given (default H.264, the baseline, then H.265). Whenever the camera is not on
+the codec a run needs, the script asks you to switch it on the camera and press Enter
 ('s' skips that codec, 'q' stops). The switch is verified from the driver log.
 Runs are grouped so that you switch as few times as possible.
 
@@ -84,7 +85,8 @@ AXES = [
          "auto | full_auto | adaptive | shutter:<N> | manual:<N> (shutter = 1/N s)"),
     Axis("sub_mode", "sub", "--sub-modes", ["normal", "hdr", "pure", "liveview"], "sub_mode", "|".join(SUB_MODES)),
     Axis("codec", "codec", "--codecs", ["h264", "h265"], "codec",
-         "h264 | h265, or 'current' to keep whatever the camera uses (no prompts)"),
+         "h264 | h265 in the order to test (first = baseline), or 'current' to keep whatever the "
+         "camera uses (no prompts)"),
     Axis("contrast", "con", "--contrast", ["64", "0", "256"], "image", "0..256 (SDK default 64)"),
     Axis("saturation", "sat", "--saturation", ["64", "0", "256"], "image", "0..256 (SDK default 64)"),
     Axis("brightness", "bri", "--brightness", ["0", "-256", "256"], "image", "-256..256 (SDK default 0)"),
@@ -514,14 +516,9 @@ class Store:
 
 # ----------------------------------------------------------------------------- planning & analysis
 
-def baseline_codec_from(store, values):
-    """Baseline codec: the camera's codec seen in the first screening baseline run, if it is in the list."""
-    if values == ["current"]:
-        return "current"
-    for r in store.rows:
-        if r["phase"] == "screen" and r["rep"] == "0" and r["actual_codec"] in values:
-            return r["actual_codec"]
-    return None
+def baseline_codec(values):
+    """Baseline codec: the first one listed (H.264 by default), or 'current' to never ask for a switch."""
+    return values[0]
 
 
 def make_baseline(axis_values, codec_baseline):
@@ -873,29 +870,6 @@ class Sweeper:
         self.store.append({"timestamp": datetime.now().isoformat(timespec="seconds"), "phase": phase, "rep": rep,
                            "config_id": config_id(cfg), **cfg, "status": "codec_unavailable"}, [])
 
-    def detect_codec_baseline(self, cfg_without_codec):
-        """First screening run: accept whatever codec the camera has and make it the baseline."""
-        values = self.axis_values["codec"]
-        cfg = dict(cfg_without_codec, codec="current")
-        print("[screen] baseline (detecting the camera's codec) ... ", end="", flush=True)
-        log_path = self.log_dir / "screen_baseline_detect_rep0.log"
-        run, status = self.launch(cfg, log_path, None)
-        codec = run.codec
-        if codec in values:
-            cfg["codec"] = codec
-            row, window_rows = summarize(cfg, "screen", 0, run, status, self.args, log_path)
-            if status != "aborted":
-                self.store.append(row, window_rows)
-            print(f"{status}  camera codec {codec} -> baseline  latency mean={row['lat_mean_ms']} ms", flush=True)
-            time.sleep(self.args.cooldown)
-            return codec if status in FINAL_STATUSES else None
-        print(f"{status}  camera codec {codec or 'unknown'}", flush=True)
-        if codec is None:
-            if status in ("no_camera", "open_failed"):
-                self.quit = True
-            return None
-        return values[0]  # camera codec is not in the list: use the first listed one (the run will prompt)
-
     def restore(self):
         """Puts the camera back to the baseline sub-mode / image settings with a short driver run."""
         base = {n: v[0] for n, v in self.axis_values.items()}
@@ -970,7 +944,7 @@ def main():
     log_dir = out.with_name(out.name + "_logs")
     store = Store(summary_path, windows_path)
 
-    codec_baseline = baseline_codec_from(store, axis_values["codec"])
+    codec_baseline = baseline_codec(axis_values["codec"])
     per_run = 10 + (args.warmup_reports + args.reports) * args.report_period + 5 + args.cooldown
 
     if args.summary_only:
@@ -978,14 +952,13 @@ def main():
         return 0
 
     # ---- plan / dry run
-    plan_base = codec_baseline or (axis_values["codec"][0] if axis_values["codec"] != ["current"] else "current")
-    s_plan = screening_plan(axis_values, plan_base, args.baseline_repeats)
+    s_plan = screening_plan(axis_values, codec_baseline, args.baseline_repeats)
     s_todo = [(c, r) for c, r in s_plan if not store.has("screen", config_id(c), r)]
     if args.dry_run:
         print(f"Screening: {len(s_plan)} runs ({len(s_plan) - len(s_todo)} done), ~{len(s_todo) * per_run / 60:.0f} min")
         for cfg, rep in s_todo:
             print(f"  {config_id(cfg)}" + (f" (rep {rep})" if rep else ""))
-        if codec_baseline is not None and not s_todo:
+        if not s_todo:
             _, full_axes, _ = analyse_screening(store, axis_values, codec_baseline, args)
             f_plan = full_plan(axis_values, codec_baseline, full_axes, None)
             f_todo = [c for c in f_plan if not store.ok_anywhere(config_id(c))]
@@ -1019,18 +992,6 @@ def main():
     try:
         # ---- phase 1: screening
         if args.phase in ("all", "screen"):
-            if codec_baseline is None:
-                base = make_baseline(axis_values, "current")
-                if store.has("screen", config_id(base), 0) and axis_values["codec"] == ["current"]:
-                    codec_baseline = "current"
-                elif axis_values["codec"] == ["current"]:
-                    codec_baseline = "current"
-                else:
-                    codec_baseline = sweeper.detect_codec_baseline(base)
-                    if codec_baseline is None:
-                        print("Could not run the baseline; stopping.", flush=True)
-                        return 1
-            s_plan = screening_plan(axis_values, codec_baseline, args.baseline_repeats)
             s_todo = [(c, r) for c, r in s_plan if not store.has("screen", config_id(c), r)]
             print(f"\nScreening: {len(s_plan)} runs, {len(s_todo)} to do (~{len(s_todo) * per_run / 60:.0f} min)",
                   flush=True)
@@ -1039,13 +1000,12 @@ def main():
                 if sweeper.stop_requested or sweeper.quit:
                     break
                 sweeper.execute(cfg, "screen", rep, len(s_todo))
-            write_report(store, axis_values, codec_baseline, args, report_path,
-                         quiet=args.phase == "all" and not (sweeper.stop_requested or sweeper.quit))
+            write_report(store, axis_values, codec_baseline, args, report_path, quiet=True)  # printed at the end
 
         # ---- phase 2: full sweep
         if args.phase in ("all", "full") and not (sweeper.stop_requested or sweeper.quit):
-            if codec_baseline is None:
-                print("Screening has not been run yet; run with --phase screen or --phase all first.")
+            if any(not store.has("screen", config_id(c), r) for c, r in s_plan):
+                print("Screening is not complete; run it first (--phase screen or --phase all).", flush=True)
                 return 1
             verdicts, full_axes, screen_lines = analyse_screening(store, axis_values, codec_baseline, args)
             print("\n" + "\n".join(screen_lines), flush=True)
