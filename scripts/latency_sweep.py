@@ -133,12 +133,29 @@ class Run:
         self.fatal = None
         self.log = open(log_path, "w")
         env = dict(os.environ, RCUTILS_COLORIZED_OUTPUT="0", RCUTILS_LOGGING_BUFFERED_STREAM="1")
+        # The camera SDK prints some log lines in a non-UTF-8 encoding (e.g. GBK); replace undecodable bytes
+        # instead of letting the reader thread die, which would stop parsing and stall the driver's stdout pipe.
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace",
                                      bufsize=1, env=env, start_new_session=True)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
     def _read(self):
+        try:
+            self._parse_lines()
+        except Exception as e:  # keep draining the pipe so the driver never blocks on a full stdout
+            with self.lock:
+                if self.fatal is None:
+                    self.fatal = "log_read_error"
+            self.log.write(f"\n[latency_sweep] log reader error: {e!r}\n")
+            try:
+                while self.proc.stdout.read(65536):
+                    pass
+            except Exception:
+                pass
+
+    def _parse_lines(self):
         for line in self.proc.stdout:
             self.log.write(line)
             self.log.flush()
@@ -265,10 +282,28 @@ def main():
     windows_path = out.with_name(out.name + "_windows.csv")
     log_dir = out.with_name(out.name + "_logs")
 
+    # Rows with these statuses are final; any other status (start_timeout, exited, no_camera, ...) is
+    # retried on resume, and its old rows are removed from both CSVs so each configuration appears once.
+    final_statuses = {"ok", "start_failed", "bad_resolution", "skipped_resolution_failed"}
     done = set()
     if not args.no_resume and summary_path.exists():
         with open(summary_path, newline="") as f:
-            done = {row["config_id"] for row in csv.DictReader(f)}
+            rows = list(csv.DictReader(f))
+        done = {r["config_id"] for r in rows if r.get("status") in final_statuses}
+        retry = {r["config_id"] for r in rows} - done
+        if retry and not args.dry_run:
+            print(f"Retrying {len(retry)} configuration(s) that did not finish cleanly before")
+            with open(summary_path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(r for r in rows if r["config_id"] in done)
+            if windows_path.exists():
+                with open(windows_path, newline="") as f:
+                    wrows = list(csv.DictReader(f))
+                with open(windows_path, "w", newline="") as f:
+                    w = csv.DictWriter(f, fieldnames=WINDOW_FIELDS, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(r for r in wrows if r["config_id"] in done)
     todo = [c for c in configs if config_id(c[0], c[1], *c[2]) not in done]
 
     # ~5 s driver start delay + startup + (warm-up + kept) windows + shutdown + cooldown
