@@ -10,6 +10,9 @@
     <arg name="dual_fisheye2perspective" default="false" description="Perspective view from dual-fisheye frames"/>
     <arg name="equirectangular2perspective" default="true" description="Perspective view from equirectangular frames"/>
     <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
+    <arg name="decouple_flowstate" default="true" description="decouples orientation corrections introduced by stitching with flowstate"/>
+    <arg name="display_flowstate_orientation" default="true" description="display orientation useb by flowstate and used for decoupling"/>
+    <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
 
     <!-- Config file paths -->
     <arg name="webcam_equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/webcam_equirectangular.yaml" description="Path to YAML config for webcam_equirectangular"/>
@@ -50,7 +53,7 @@
         </node>
     </group>
 
-    <!-- Creates Perspective Images from equirectangular images -->
+	<!-- Creates Perspective Images from equirectangular images -->
     <node if="$(var equirectangular2perspective)" pkg="insta360_ros_driver" exec="equirectangular2perspective_cpp" name="equirectangular2perspective_node" output="screen">
         <param from="$(var equirectangular2perspective_config)"/>
     </node>
@@ -72,4 +75,19 @@
     <node if="$(var ffmpeg_decoder)" pkg="insta360_ros_driver" exec="ffmpeg_decoder" name="ffmpeg_decoder" output="screen">
         <param from="$(var ffmpeg_decoder_config)"/>
     </node>
-</launch>
+    <group if="$(var display_flowstate_orientation)"> 
+    <!-- Static TF: map -> camera_frame (identity) -->
+    <node pkg="tf2_ros" exec="static_transform_publisher" name="map_to_camera_tf"
+          args="--x 0 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1 --frame-id map --child-frame-id camera_frame"/>
+
+    <!-- QuaternionStamped -> PoseStamped -->
+    <node pkg="topic_tools" exec="transform" name="quat_to_pose"
+          args="/equirectangular/flowstate_orientation /pose_out geometry_msgs/msg/PoseStamped
+  geometry_msgs.msg.PoseStamped(header=m.header,pose=geometry_msgs.msg.Pose(orientation=m.quaternion)) --import geometry_msgs --wait-for-start"/>
+    </group>
+    <!-- QuaternionStamped -> Quaternion -->
+    <node pkg="topic_tools" exec="transform" name="quat_stamped_to_quat"
+	    args="/equirectangular/flowstate_orientation /camera_orientation/quaternion geometry_msgs/msg/Quaternion m.quaternion --import geometry_msgs --wait-for-start"
+	    if="$(var decouple_flowstate)"/>
+  </launch>
+
