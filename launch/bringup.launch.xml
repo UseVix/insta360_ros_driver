@@ -7,8 +7,8 @@
     <arg name="ffmpeg_decoder" default="false" description="FFmpeg decoder for compressed video streams"/>
     <arg name="gstreamer_encoder" default="true" description="GStreamer video encoder and streaming node"/>
     <arg name="udp" default="false" description="Transmission mode: false for ROS topic, true for direct RTP/UDP"/>
-    <arg name="dual_fisheye2perspective" default="true" description="Perspective view from dual-fisheye frames"/>
-    <arg name="equirectangular2perspective" default="false" description="Perspective view from equirectangular frames"/>
+    <arg name="dual_fisheye2perspective" default="false" description="Perspective view from dual-fisheye frames"/>
+    <arg name="equirectangular2perspective" default="true" description="Perspective view from equirectangular frames"/>
     <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
 
     <!-- Config file paths -->

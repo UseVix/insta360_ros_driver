@@ -60,7 +60,7 @@ public:
         output_pub_ = create_publisher<sensor_msgs::msg::Image>(
             get_parameter("output_topic").as_string(), rclcpp::SensorDataQoS());
         orientation_pub_ = create_publisher<geometry_msgs::msg::QuaternionStamped>(
-            get_parameter("orientation_topic").as_string(), rclcpp::SensorDataQoS());
+            get_parameter("orientation_topic").as_string(), rclcpp::QoS(1).reliable());
         // Use RELIABLE QoS(10) to match publisher and prevent packet drops
         video_sub_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
             get_parameter("input_video_topic").as_string(), rclcpp::QoS(10),
