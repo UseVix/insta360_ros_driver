@@ -338,6 +338,7 @@ Performs real-time hardware-accelerated stitching of dual-fisheye video packets 
 | `enable_direction_lock` | `bool` | `false` | Locks panorama orientation along the forward heading direction |
 | `enable_deflicker` | `bool` | `false` | Suppresses exposure flicker between frames |
 | `enable_defringe` | `bool` | `false` | Corrects chromatic lens fringing artifacts |
+| `stab_type` | `string` | `sdk_default` | Overrides the undocumented internal stabilizer mode: `off` (no stabilization, image follows camera), `still` (SDK default, all axes locked), `z_directional` (level horizon, heading follows), `full_directional` (follows camera, smoothed), `off_gravity_adjust` (only horizon levelling) |
 
 #### CLI Usage
 ```bash

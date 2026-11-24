@@ -18,6 +18,18 @@
 #include <string>
 #include <vector>
 
+// Undocumented libMediaSDK internals (3.1.1), recovered from the library's symbol table and
+// the STABTYPE name table in ins::Stabilizer::operator<<. Not part of the public SDK API.
+namespace ins { namespace Stabilizer {
+enum STABTYPE : int {
+    kStabOff = -1,                  // no stabilization: image follows the camera exactly
+    kStill = 0,                     // SDK default (direction lock off): all axes locked in space
+    kZDirectional = 1,              // used when direction lock is on: level horizon, heading follows camera
+    kFullDirectional = 2,           // all axes follow the camera, smoothed (shake removed)
+    kStabOffWithGravityAdjust = 13, // no stabilization except horizon levelling
+};
+}}
+
 namespace arvrender {
 struct Quat {
     float x;
@@ -30,6 +42,7 @@ class SequenceStabilizer {
 public:
     Quat GetStabilizerQuaternion(double timestamp);
     Quat GetDirectionalQuaternion(double timestamp);
+    void SetStabType(ins::Stabilizer::STABTYPE type);
 };
 }
 
@@ -52,6 +65,9 @@ public:
         declare_parameter("enable_direction_lock", false);
         declare_parameter("enable_deflicker", false);
         declare_parameter("enable_defringe", false);
+        // Overrides the SDK's internal stabilization mode once the stabilizer exists.
+        // "sdk_default" leaves it alone (kStill, or kZDirectional with direction lock).
+        declare_parameter("stab_type", "sdk_default");
 
         ins::InitEnv();
         ins::SetLogLevel(ins::InsLogLevel::WARNING);
@@ -223,6 +239,9 @@ private:
             if (imp) {
                 auto* stabilizer = *reinterpret_cast<arvrender::SequenceStabilizer**>(
                     reinterpret_cast<char*>(imp) + 0x260);
+                if (stabilizer && !stab_type_applied_) {
+                    apply_stab_type(stabilizer);
+                }
                 if (stabilizer) {
                     try {
                         auto q = stabilizer->GetStabilizerQuaternion(static_cast<double>(timestamp));
@@ -242,8 +261,37 @@ private:
         }
     }
 
+    void apply_stab_type(arvrender::SequenceStabilizer* stabilizer)
+    {
+        stab_type_applied_ = true;
+        const auto name = get_parameter("stab_type").as_string();
+        ins::Stabilizer::STABTYPE type;
+        if (name == "sdk_default") {
+            return;
+        } else if (name == "off") {
+            type = ins::Stabilizer::kStabOff;
+        } else if (name == "still") {
+            type = ins::Stabilizer::kStill;
+        } else if (name == "z_directional") {
+            type = ins::Stabilizer::kZDirectional;
+        } else if (name == "full_directional") {
+            type = ins::Stabilizer::kFullDirectional;
+        } else if (name == "off_gravity_adjust") {
+            type = ins::Stabilizer::kStabOffWithGravityAdjust;
+        } else {
+            RCLCPP_ERROR(get_logger(),
+                "Unknown stab_type '%s' (expected sdk_default, off, still, z_directional, "
+                "full_directional, off_gravity_adjust); leaving SDK default", name.c_str());
+            return;
+        }
+        stabilizer->SetStabType(type);
+        RCLCPP_INFO(get_logger(), "MediaSDK stabilizer type set to '%s' (%d)", name.c_str(),
+                    static_cast<int>(type));
+    }
+
     std::shared_ptr<ins::RealTimeStitcher> stitcher_;
     bool configured_ = false;
+    bool stab_type_applied_ = false;
     rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr video_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_sub_;
