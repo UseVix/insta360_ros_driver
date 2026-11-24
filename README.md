@@ -296,6 +296,19 @@ ros2 run insta360_ros_driver gstreamer_encoder --ros-args \
   -p transport:=udp
 ```
 
+#### Timing GStreamer encoding/decoding
+`scripts/gst_timing.sh` toggles GStreamer's built-in `latency` tracer in the current shell by setting or unsetting `GST_TRACERS` and `GST_DEBUG`. Every GStreamer process started from that shell afterwards (`gstreamer_decoder`, `gstreamer_encoder`, `media_sdk_stitcher`, `gst-launch-1.0`) logs to stderr how long each element (encoder, decoder, parser, ...) takes per buffer, plus the total time from `appsrc` to `appsink`. It must be **sourced**:
+```bash
+source scripts/gst_timing.sh   # on if off, off if on
+```
+Times are in nanoseconds. To get the mean time per element, save a node's output (e.g. `... 2> gst.log`) and run:
+```bash
+grep "element-latency, element-id" gst.log | grep -v format \
+  | sed -E 's/.*element=\(string\)([^,]+),.*time=\(guint64\)([0-9]+).*/\1 \2/' \
+  | awk '{n[$1]++; t[$1]+=$2} END {for (e in n) printf "%-24s %6d buffers  %8.3f ms\n", e, n[e], t[e]/n[e]/1e6}'
+```
+Nodes that are already running are not affected until they are restarted.
+
 ---
 
 ### 5. MediaSDK Hardware Stitcher (`media_sdk_stitcher`)
