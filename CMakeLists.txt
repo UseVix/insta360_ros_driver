@@ -179,7 +179,7 @@ target_link_libraries(gstreamer_decoder "${cpp_typesupport_target}")
 add_executable(media_sdk_stitcher src/media_sdk_stitcher.cpp)
 ament_target_dependencies(media_sdk_stitcher rclcpp sensor_msgs cv_bridge rosidl_default_runtime)
 target_include_directories(media_sdk_stitcher PRIVATE ${MEDIA_SDK_INCLUDE_DIR})
-target_link_libraries(media_sdk_stitcher ${MEDIA_SDK_LIBRARY} pthread)
+target_link_libraries(media_sdk_stitcher ${MEDIA_SDK_LIBRARY} pthread ${CMAKE_DL_LIBS})
 if(MEDIA_SDK_FROM_BUNDLED_PACKAGE)
   set_target_properties(media_sdk_stitcher PROPERTIES INSTALL_RPATH "$ORIGIN/media_sdk")
   install(

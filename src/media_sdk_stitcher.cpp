@@ -11,6 +11,8 @@
 
 #include <geometry_msgs/msg/quaternion_stamped.hpp>
 
+#include "stabilization_patch.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <mutex>
@@ -52,6 +54,9 @@ public:
         declare_parameter("enable_direction_lock", false);
         declare_parameter("enable_deflicker", false);
         declare_parameter("enable_defringe", false);
+        // "sdk": the SDK's stabilization rotation is applied to the output (FlowState / direction lock).
+        // "none": no rotation is applied; the equirectangular image stays fixed to the camera.
+        declare_parameter("disable_stabilization", true);
 
         ins::InitEnv();
         ins::SetLogLevel(ins::InsLogLevel::WARNING);
@@ -134,12 +139,32 @@ private:
         stitcher_->SetOutputSize(
             get_parameter("output_width").as_int(),
             get_parameter("output_height").as_int());
-        const bool flowstate = get_parameter("enable_flowstate").as_bool();
+        
+        bool disable_stabilization = get_parameter("disable_stabilization").as_bool();
+        if (disable_stabilization ) {
+            std::string error;
+            installed = insta360_ros_driver::install_patch(error)
+            if (installed) {
+                stabilization_disabled_ = true;
+                RCLCPP_INFO(get_logger(),
+                    "stabilization SDK stabilization rotation disabled, output stays fixed to the camera. "
+                    "%s still publishes the stabilizer quaternion (camera attitude), not the applied rotation (identity).",
+                    get_parameter("orientation_topic").as_string().c_str());
+            } else {
+                RCLCPP_ERROR(get_logger(),
+                    "stabilization could not disable the SDK stabilization rotation (%s). "
+                    "Falling back to SDK stabilization; output images ARE stabilized.", error.c_str());
+            }
+        } 
+
+        bool flowstate = get_parameter("enable_flowstate").as_bool();
         if (!flowstate) {
-            RCLCPP_WARN(get_logger(),
-                "MediaSDK RealTimeStitcher requires FlowState stabilization enabled to avoid a null stabilizer crash in libMediaSDK. Enforcing FlowState enabled.");
+            // The stabilizer object must exist even when its rotation is not applied:
+            // libMediaSDK dereferences it for every frame and crashes without it.
+             RCLCPP_WARN(get_logger(),
+                "MediaSDK RealTimeStitcher requires FlowState stabilization enabled to avoid a null stabilizer crash in libMediaSDK.");
         }
-        stitcher_->EnableFlowState(true);
+        stitcher_->EnableFlowState(flowstate);
         stitcher_->EnableDirectionLock(get_parameter("enable_direction_lock").as_bool());
         stitcher_->EnableDeflicker(get_parameter("enable_deflicker").as_bool());
         stitcher_->EnableDefringe(get_parameter("enable_defringe").as_bool());
@@ -244,6 +269,9 @@ private:
 
     std::shared_ptr<ins::RealTimeStitcher> stitcher_;
     bool configured_ = false;
+    bool stabilization_disabled_ = false;
+    bool patch_checked_ = false;
+    int frames_published_ = 0;
     rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr video_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_sub_;
