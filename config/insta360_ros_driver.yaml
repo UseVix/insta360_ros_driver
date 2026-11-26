@@ -11,14 +11,13 @@ insta360_ros_driver:
     video_bitrate: 524288            # bit/s
     # Exposure (applied to the live-stream mode before streaming starts)
     # exposure_mode: unchanged | auto | shutter_priority | iso_priority | manual | adaptive | full_auto
-    # A short, fixed shutter keeps auto-exposure from lengthening exposure / dropping fps in low light.
-    exposure_mode: shutter_priority
+    exposure_mode: auto
     shutter_speed_denominator: 120   # shutter = 1/N s (0 = do not set). Use 100 under 50 Hz lighting, 120 under 60 Hz, to avoid banding
     iso: 0                           # 0 = auto (used in manual / iso_priority modes)
     ev_bias: 0
     video_iso_top_limit: 0           # 0 = do not set; caps auto ISO (noise) when the shutter is short
     # Camera video mode (persists on the camera): unchanged | normal | hdr | pure | liveview | loop_recording | ...
-    video_sub_mode: unchanged
+    video_sub_mode: liveview
     # Image settings of the live stream (only applied when apply_image_settings is true)
     apply_image_settings: false
     image_contrast: 64               # 0..256
@@ -26,11 +25,7 @@ insta360_ros_driver:
     image_brightness: 0              # -256..256
     image_sharpness: 3               # 0..6
     image_white_balance: auto        # auto | 2700k | 4000k | 5000k | 6500k | 7500k
-    # Stream format check: logs the resolution from the stream's SPS once; with measure_latency also
-    # reports received fps / bitrate against the request every latency_report_period_s
-    check_stream_format: true
-    stream_check_fps_tolerance: 0.10      # fps MATCH within +/-10 % of requested
-    stream_check_bitrate_tolerance: 0.50  # bitrate MATCH within +/-50 %, else BELOW / ABOVE
+
     # Latency measurement (camera -> OnVideoData callback); stats are logged periodically
     measure_latency: false
     latency_report_period_s: 5.0

@@ -248,7 +248,6 @@ install(PROGRAMS
   scripts/calibrate.py
   scripts/calibrate_cpp.py
   scripts/find_stabilizer_offset.py
-  scripts/latency_sweep.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

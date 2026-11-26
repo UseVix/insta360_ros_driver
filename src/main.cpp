@@ -128,143 +128,6 @@ private:
     bool offset_valid_ = false;
 };
 
-// Checks the incoming stream against the requested live-stream settings.
-// Resolution comes from the SPS inside the bitstream, frame rate from the camera timestamps of
-// consecutive frames, and bitrate from the bytes received per unit of camera time.
-// The SPS resolution is logged once (and again if it changes); fps/bitrate are reported periodically.
-class StreamFormatMonitor {
-public:
-    struct Requested {
-        std::string name;  // e.g. "1920x960p30"
-        int width = 0;
-        int height = 0;
-        double fps = 0.0;
-        double bitrate = 0.0;  // bit/s
-    };
-
-    StreamFormatMonitor(h26x::Codec codec, Requested req, rclcpp::Logger logger, double fps_tol, double bitrate_tol)
-        : codec_(codec), req_(std::move(req)), logger_(logger), fps_tol_(fps_tol), bitrate_tol_(bitrate_tol) {}
-
-    void onPacket(int stream_index, const uint8_t* data, size_t size, int64_t cam_ts_ms) {
-        bool has_vcl = false, has_key = false, has_sps = false;
-        h26x::SpsInfo sps;
-        h26x::forEachNal(data, size, [&](const uint8_t* nal, size_t n) {
-            const int type = h26x::nalType(codec_, nal, n);
-            if (h26x::isVcl(codec_, type)) has_vcl = true;
-            if (h26x::isKeyframe(codec_, type)) has_key = true;
-            if (h26x::isSps(codec_, type) && !has_sps) has_sps = h26x::parseSps(codec_, nal, n, sps);
-        });
-
-        std::lock_guard<std::mutex> lk(mtx_);
-        auto& s = streams_[stream_index];
-        s.bytes += size;
-        s.max_packet_bytes = std::max<uint64_t>(s.max_packet_bytes, size);
-        // A frame may span several packets/slices; count distinct camera timestamps instead.
-        if (has_vcl && (s.frames == 0 || cam_ts_ms != s.last_ts)) {
-            if (s.frames == 0) s.first_ts = cam_ts_ms;
-            s.last_ts = cam_ts_ms;
-            ++s.frames;
-            if (has_key) ++s.keyframes;
-        }
-        if (has_sps && (sps.width != s.width || sps.height != s.height || sps.fps != s.sps_fps)) {
-            const bool changed = s.width != 0;
-            s.width = sps.width;
-            s.height = sps.height;
-            s.sps_fps = sps.fps;
-            const char* verdict = resolutionVerdict(s.width, s.height);
-            if (changed || std::string(verdict) != "MATCH") {
-                RCLCPP_WARN(logger_, "[stream] stream %d: %s SPS %s resolution %dx%d (sps fps %s) | requested %s -> resolution %s",
-                            stream_index, codecName(), changed ? "changed to" : "reports", s.width, s.height,
-                            fmtFps(s.sps_fps).c_str(), req_.name.c_str(), verdict);
-            } else {
-                RCLCPP_INFO(logger_, "[stream] stream %d: %s SPS reports resolution %dx%d (sps fps %s) | requested %s -> resolution %s",
-                            stream_index, codecName(), s.width, s.height, fmtFps(s.sps_fps).c_str(), req_.name.c_str(), verdict);
-            }
-        }
-    }
-
-    // Logs one line per stream for the window since the previous report, then starts a new window.
-    void report() {
-        std::map<int, Window> windows;
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            for (auto& [idx, s] : streams_) {
-                windows[idx] = s;
-                s.resetWindow();
-            }
-        }
-        if (windows.empty()) {
-            RCLCPP_WARN(logger_, "[stream] no video packets received in this window");
-        }
-        for (const auto& [idx, w] : windows) {
-            double fps = NAN, bitrate = NAN;
-            if (w.frames >= 2 && w.last_ts > w.first_ts) {
-                const double span_s = (w.last_ts - w.first_ts) / 1000.0;
-                fps = (w.frames - 1) / span_s;
-                bitrate = w.bytes * 8.0 / (w.frames / fps);  // duration covered by `frames` frames
-            }
-            const double ratio = bitrate / req_.bitrate;
-            const std::string resolution = w.width ? std::to_string(w.width) + "x" + std::to_string(w.height) : "n/a";
-            RCLCPP_INFO(logger_,
-                "[stream] stream %d | resolution=%s requested=%dx%d %s | fps=%s requested=%.2f %s | "
-                "bitrate=%s requested=%.0f ratio=%s %s | sps_fps=%s frames=%lu keyframes=%lu max_packet_bytes=%lu",
-                idx, resolution.c_str(),
-                req_.width, req_.height, resolutionVerdict(w.width, w.height),
-                fmt(fps, "%.2f").c_str(), req_.fps, toleranceVerdict(fps, req_.fps, fps_tol_),
-                fmt(bitrate, "%.0f").c_str(), req_.bitrate, fmt(ratio, "%.2f").c_str(),
-                bitrateVerdict(bitrate, req_.bitrate, bitrate_tol_),
-                fmtFps(w.sps_fps).c_str(), static_cast<unsigned long>(w.frames),
-                static_cast<unsigned long>(w.keyframes), static_cast<unsigned long>(w.max_packet_bytes));
-        }
-    }
-
-private:
-    struct Window {
-        // persistent across windows
-        int width = 0, height = 0;
-        double sps_fps = 0.0;
-        // per window
-        uint64_t bytes = 0, frames = 0, keyframes = 0, max_packet_bytes = 0;
-        int64_t first_ts = 0, last_ts = 0;
-        void resetWindow() {
-            // Keep last_ts so the first frame of the next window is not mistaken for a duplicate.
-            bytes = frames = keyframes = max_packet_bytes = 0;
-            first_ts = 0;
-        }
-    };
-
-    const char* codecName() const { return codec_ == h26x::Codec::H264 ? "h264" : "h265"; }
-    const char* resolutionVerdict(int w, int h) const {
-        if (w == 0) return "UNKNOWN";
-        return (w == req_.width && h == req_.height) ? "MATCH" : "MISMATCH";
-    }
-    static const char* toleranceVerdict(double actual, double requested, double tol) {
-        if (!std::isfinite(actual) || requested <= 0.0) return "UNKNOWN";
-        return std::fabs(actual - requested) <= tol * requested ? "MATCH" : "MISMATCH";
-    }
-    // Encoders undershoot on easy-to-compress scenes, so a low bitrate alone does not prove the
-    // request was ignored; ABOVE (well over the request) is the clear sign that it was.
-    static const char* bitrateVerdict(double actual, double requested, double tol) {
-        if (!std::isfinite(actual) || requested <= 0.0) return "UNKNOWN";
-        if (actual > requested * (1.0 + tol)) return "ABOVE";
-        if (actual < requested * (1.0 - tol)) return "BELOW";
-        return "MATCH";
-    }
-    static std::string fmt(double v, const char* f) {
-        if (!std::isfinite(v)) return "n/a";
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), f, v);
-        return buf;
-    }
-    static std::string fmtFps(double v) { return v > 0.0 ? fmt(v, "%.2f") : "n/a"; }
-
-    h26x::Codec codec_;
-    Requested req_;
-    rclcpp::Logger logger_;
-    double fps_tol_, bitrate_tol_;
-    std::mutex mtx_;
-    std::map<int, Window> streams_;
-};
 
 class TestStreamDelegate : public ins_camera::StreamDelegate {
 private:
@@ -274,16 +137,14 @@ private:
     rclcpp::Publisher<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_pub_;
     std::string video_format_;
     std::shared_ptr<LatencyMonitor> latency_;  // null when measurement is disabled
-    std::shared_ptr<StreamFormatMonitor> format_;  // null when stream checking is disabled
     std::atomic<bool> first_frame_logged_{false};
     std::atomic<bool> first_exposure_logged_{false};
     std::atomic<double> last_exposure_time_s_{NAN};
 
 public:
     TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node, const std::string& video_format = "h264",
-                       std::shared_ptr<LatencyMonitor> latency = nullptr,
-                       std::shared_ptr<StreamFormatMonitor> format = nullptr)
-        : node_(node), video_format_(video_format), latency_(std::move(latency)), format_(std::move(format)) {
+                       std::shared_ptr<LatencyMonitor> latency = nullptr)
+        : node_(node), video_format_(video_format), latency_(std::move(latency)) {
         if (!node_->has_parameter("compressed_stream_topic")) {
             node_->declare_parameter("compressed_stream_topic", "/dual_fisheye/image/compressed_stream");
         }
@@ -344,9 +205,6 @@ public:
             if (latency_) {
                 latency_->record(stream_index, timestamp, arrival_ms);
             }
-            if (format_) {
-                format_->onPacket(stream_index, data, size, timestamp);
-            }
         }
     }
 
@@ -379,16 +237,10 @@ public:
         }
     }
 
-    // Most recent exposure time reported by the camera, in seconds (NaN until the first report).
-    double lastExposureTime() const { return last_exposure_time_s_.load(); }
+
 
     void OnExposureData(const ins_camera::ExposureData& data) override {
-        last_exposure_time_s_.store(data.exposure_time);
-        if (!first_exposure_logged_.exchange(true)) {
-            // Confirms whether the requested shutter speed was actually applied by the camera.
-            RCLCPP_INFO(node_->get_logger(), "First exposure report from camera: exposure_time=%.6f s (1/%.0f s)",
-                        data.exposure_time, data.exposure_time > 0.0 ? 1.0 / data.exposure_time : 0.0);
-        }
+
         if (exposure_pub_) {
             auto msg = std::make_unique<insta360_ros_driver::msg::ExposureData>();
             msg->timestamp = data.timestamp;
@@ -409,7 +261,6 @@ private:
     int clock_sync_samples_ = 30;
     std::shared_ptr<LatencyMonitor> latency_;
     std::shared_ptr<TestStreamDelegate> delegate_;
-    std::shared_ptr<StreamFormatMonitor> format_;
     rclcpp::TimerBase::SharedPtr clock_sync_timer_;
     rclcpp::TimerBase::SharedPtr latency_report_timer_;
 
@@ -724,23 +575,9 @@ public:
                     static_cast<int>(preview.crop_info.src_width), static_cast<int>(preview.crop_info.src_height),
                     static_cast<int>(preview.crop_info.dst_width), static_cast<int>(preview.crop_info.dst_height));
 
-        // Compare the incoming stream against what was requested (resolution logged once from the SPS;
-        // fps and bitrate reported together with the latency statistics).
-        if (declareParam<bool>("check_stream_format", true)) {
-            StreamFormatMonitor::Requested req;
-            req.name = resolution_name;
-            int fps_int = 0;
-            if (std::sscanf(resolution_name.c_str(), "%dx%dp%d", &req.width, &req.height, &fps_int) == 3) {
-                req.fps = fps_int;
-            }
-            req.bitrate = param.video_bitrate;
-            format_ = std::make_shared<StreamFormatMonitor>(
-                video_format == "h265" ? h26x::Codec::H265 : h26x::Codec::H264, req, node_->get_logger(),
-                declareParam<double>("stream_check_fps_tolerance", 0.10),
-                declareParam<double>("stream_check_bitrate_tolerance", 0.50));
-        }
 
-        delegate_ = std::make_shared<TestStreamDelegate>(node_, video_format, latency_, format_);
+
+        delegate_ = std::make_shared<TestStreamDelegate>(node_, video_format, latency_);
         std::shared_ptr<ins_camera::StreamDelegate> delegate = delegate_;
         cam->SetStreamDelegate(delegate);
 
@@ -779,11 +616,6 @@ public:
                 duration_cast<nanoseconds>(duration<double>(report_period_s)),
                 [this]() {
                     latency_->report(node_->get_logger());
-                    if (format_) format_->report();
-                    const double exp_s = delegate_->lastExposureTime();
-                    if (std::isfinite(exp_s) && exp_s > 0.0) {
-                        RCLCPP_INFO(node_->get_logger(), "[latency] current exposure_time=%.6f s (1/%.0f s)", exp_s, 1.0 / exp_s);
-                    }
                 });
             RCLCPP_INFO(node_->get_logger(),
                 "[latency] measurement enabled: report every %.1f s, clock sync every %.1f s (%d samples)",

@@ -77,7 +77,7 @@ namespace insta360_ros_driver {
 
   // Same ABI as the originals: `this` in rdi, glm::quat (4 floats x,y,z,w) returned in xmm0/xmm1.
   struct Quat { float x, y, z, w; };
-  static Quat identity_quat(void*) { calls_.fetch_add(1, std::memory_order_relaxed); return {0.f, 0.f, 0.f, 1.f}; }
+  static Quat identity_quat(void*) {return {0.f, 0.f, 0.f, 1.f}; }
   static bool write_slot(void** slot, void* fn, std::string& error) {
     const long page = sysconf(_SC_PAGESIZE);
     auto* start = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(slot) & ~static_cast<uintptr_t>(page - 1));
