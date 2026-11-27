@@ -41,7 +41,8 @@ The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera'
    ```
    sudo apt install <MediaSDK .deb file>
    ```
-   For the [Docker installation](#docker-installation), copy `.deb` file into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.<br>
+   For the [Docker installation](#docker-installation), copy `.deb` file into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
+
 CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x <MediaSDK .deb file> <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
 ```bash
 colcon build --symlink-install --cmake-args \
