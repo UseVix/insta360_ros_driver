@@ -1,0 +1,34 @@
+insta360_ros_driver:
+  ros__parameters:
+    compressed_stream_topic: /dual_fisheye/image/compressed_stream
+    imu_topic: imu/data_raw
+    exposure_data_topic: /camera/exposure_data
+    camera_preview_info_topic: /insta360/camera_preview_info
+    clock_sync_service: /insta360/clock_sync   # service returning rtt, camera time and ROS-clock offset
+    # Live stream format
+    # 3840x1920p30 | 2560x1280p30 | 2304x1152p30 | 1920x960p30 | 1440x720p30 | 960x480p30 | 3840x1920p60 | 2560x1280p60
+    # (not every model/firmware accepts every entry; the driver exits if StartLiveStreaming fails)
+    video_resolution: 1920x960p30
+    video_bitrate: 524288            # bit/s
+    # Exposure (applied to the live-stream mode before streaming starts)
+    # exposure_mode: unchanged | auto | shutter_priority | iso_priority | manual | adaptive | full_auto
+    exposure_mode: auto
+    shutter_speed_denominator: 120   # shutter = 1/N s (0 = do not set). Use 100 under 50 Hz lighting, 120 under 60 Hz, to avoid banding
+    iso: 0                           # 0 = auto (used in manual / iso_priority modes)
+    ev_bias: 0
+    video_iso_top_limit: 0           # 0 = do not set; caps auto ISO (noise) when the shutter is short
+    # Camera video mode (persists on the camera): unchanged | normal | hdr | pure | liveview | loop_recording | ...
+    video_sub_mode: liveview
+    # Image settings of the live stream (only applied when apply_image_settings is true)
+    apply_image_settings: false
+    image_contrast: 64               # 0..256
+    image_saturation: 64             # 0..256
+    image_brightness: 0              # -256..256
+    image_sharpness: 3               # 0..6
+    image_white_balance: auto        # auto | 2700k | 4000k | 5000k | 6500k | 7500k
+
+    # Latency measurement (camera -> OnVideoData callback); stats are logged periodically
+    measure_latency: false
+    latency_report_period_s: 5.0
+    clock_sync_period_s: 10.0
+    clock_sync_samples: 30

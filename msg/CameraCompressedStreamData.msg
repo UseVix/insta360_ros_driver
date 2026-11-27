@@ -1,0 +1,3 @@
+sensor_msgs/CompressedImage data
+uint8 stream_type
+int32 stream_index

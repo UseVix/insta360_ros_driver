@@ -1,5 +1,7 @@
-perspective_node:
+dual_fisheye2equirectangular_node:
   ros__parameters:
+    input_topic: /dual_fisheye/image
+    output_topic: /equirectangular/image
     cx_offset: 0.0
     cy_offset: 0.0
     crop_size: 0
@@ -8,5 +10,3 @@ perspective_node:
     gpu: true
     out_width: 1920
     out_height: 960
-    horizontal_fov: 120.0
-    vertical_fov: 81.7867893

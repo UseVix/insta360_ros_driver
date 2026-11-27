@@ -1,0 +1,7 @@
+ffmpeg_decoder:
+  ros__parameters:
+    use_custom_stream_msg: false
+    compressed_topic: /equirectangular/image/h264
+    uncompressed_topic: /equirectangular/image/decoded
+    skip_frame: 0
+    i_frame_only: false

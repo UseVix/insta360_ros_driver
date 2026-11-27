@@ -1,4 +1,3 @@
-#include <iostream>
 #include <thread>
 #include <string>
 #include <queue>
@@ -9,17 +8,15 @@
 #include <opencv2/opencv.hpp>
 
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/image.hpp"
-#include "cv_bridge/cv_bridge.hpp"
+#include "cv_bridge/cv_bridge.h"
 #include "sensor_msgs/image_encodings.hpp"
+#include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
 extern "C" {
     #include <libavcodec/avcodec.h>
-    #include <libavformat/avformat.h>
     #include <libswscale/swscale.h>
-    #include <libavutil/imgutils.h>
 }
 
 static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
@@ -34,7 +31,7 @@ static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelF
 
 class H264DecoderNode : public rclcpp::Node {
 private:
-    const AVCodec* codec_ = nullptr;
+    AVCodec* codec_ = nullptr;
     AVCodecContext* codec_ctx_ = nullptr;
     AVCodecParserContext* parser_ctx_ = nullptr;
     AVPacket* pkt_ = nullptr;
@@ -46,10 +43,16 @@ private:
     enum AVHWDeviceType hw_type_ = AV_HWDEVICE_TYPE_NONE;
 
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr subscription_;
+    rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr custom_subscription_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
 
+    struct QueuedFrame {
+        cv::Mat image;
+        std_msgs::msg::Header header;
+    };
+
     std::thread publisher_thread_;
-    std::queue<cv::Mat> frame_publish_queue_;
+    std::queue<QueuedFrame> frame_publish_queue_;
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::atomic<bool> stop_publisher_thread_{false};
@@ -135,7 +138,7 @@ private:
 
     void PublisherThreadLoop() {
         while (!stop_publisher_thread_) {
-            cv::Mat frame_to_publish;
+            QueuedFrame frame_to_publish;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
                 queue_cv_.wait(lock, [this] {
@@ -152,19 +155,16 @@ private:
                 frame_publish_queue_.pop();
             }
 
-            if (!frame_to_publish.empty() && publisher_) {
+            if (!frame_to_publish.image.empty() && publisher_) {
                 auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
-                std_msgs::msg::Header header;
-                header.stamp = this->get_clock()->now();
-                header.frame_id = "camera_frame";
-                cv_bridge::CvImage cv_image(header, sensor_msgs::image_encodings::BGR8, frame_to_publish);
+                cv_bridge::CvImage cv_image(frame_to_publish.header, sensor_msgs::image_encodings::BGR8, frame_to_publish.image);
                 cv_image.toImageMsg(*img_msg);
                 publisher_->publish(std::move(img_msg));
             }
         }
     }
 
-    void DecodeAndDisplayPacket(AVPacket* packet) {
+    void DecodeAndDisplayPacket(AVPacket* packet, const std_msgs::msg::Header& header) {
         int ret = avcodec_send_packet(codec_ctx_, packet);
         if (ret < 0) {
             return;
@@ -224,7 +224,7 @@ private:
                     {
                         std::lock_guard<std::mutex> lock(queue_mutex_);
                         if (frame_publish_queue_.size() < max_queue_size_) {
-                            frame_publish_queue_.push(frame_copy);
+                            frame_publish_queue_.push({frame_copy, header});
                         }
                     }
                     queue_cv_.notify_one();
@@ -271,8 +271,10 @@ private:
         codec_ = nullptr;
     }
 
-    void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
-        if (msg->format != "h264") {
+    void decode_frame(const sensor_msgs::msg::CompressedImage& msg) {
+        if (msg.format != "h264") {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "H264DecoderNode: received format '%s', but only 'h264' is supported", msg.format.c_str());
             return;
         }
 
@@ -280,8 +282,8 @@ private:
             return;
         }
 
-        const uint8_t* cur_data = msg->data.data();
-        size_t remaining_size = msg->data.size();
+        const uint8_t* cur_data = msg.data.data();
+        size_t remaining_size = msg.data.size();
 
         while (remaining_size > 0) {
             int bytes_parsed = av_parser_parse2(parser_ctx_, codec_ctx_,
@@ -300,19 +302,34 @@ private:
                     // Parse NAL unit type from H.264 stream
                     // The parser sets keyframe flag for I-frames
                     if (parser_ctx_->key_frame == 1) {
-                        DecodeAndDisplayPacket(pkt_);
+                        DecodeAndDisplayPacket(pkt_, msg.header);
                     }
                 } else {
-                    DecodeAndDisplayPacket(pkt_);
+                    DecodeAndDisplayPacket(pkt_, msg.header);
                 }
             }
         }
     }
 
+    void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+        decode_frame(*msg);
+    }
+
+    void custom_stream_callback(const insta360_ros_driver::msg::CameraCompressedStreamData::SharedPtr msg) {
+        decode_frame(msg->data);
+    }
+
 public:
-    H264DecoderNode() : Node("h264_decoder_node") {
-        this->declare_parameter("compressed_topic", "/dual_fisheye/image/compressed");
-        this->declare_parameter("uncompressed_topic", "/dual_fisheye/image");
+    H264DecoderNode() : Node("ffmpeg_decoder") {
+        this->declare_parameter("use_custom_stream_msg", false);
+        bool use_custom_stream_msg = this->get_parameter("use_custom_stream_msg").as_bool();
+
+        std::string default_topic = use_custom_stream_msg ?
+            "/dual_fisheye/image/compressed_stream" :
+            "/equirectangular/image/h264";
+
+        this->declare_parameter("compressed_topic", default_topic);
+        this->declare_parameter("uncompressed_topic", "/equirectangular/image/decoded");
         this->declare_parameter("skip_frame", 0);
         this->declare_parameter("i_frame_only", false);
 
@@ -321,9 +338,15 @@ public:
         skip_frame_ = this->get_parameter("skip_frame").as_int();
         i_frame_only_ = this->get_parameter("i_frame_only").as_bool();
 
-        subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
-            subscribe_topic, 10,
-            std::bind(&H264DecoderNode::compressed_image_callback, this, std::placeholders::_1));
+        if (use_custom_stream_msg) {
+            custom_subscription_ = this->create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
+                subscribe_topic, 10,
+                std::bind(&H264DecoderNode::custom_stream_callback, this, std::placeholders::_1));
+        } else {
+            subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+                subscribe_topic, 10,
+                std::bind(&H264DecoderNode::compressed_image_callback, this, std::placeholders::_1));
+        }
 
         publisher_ = this->create_publisher<sensor_msgs::msg::Image>(publish_topic, 10);
 
@@ -332,6 +355,7 @@ public:
         InitFFmpegDecoder();
 
         RCLCPP_INFO(this->get_logger(), "H.264 Decoder Node initialized");
+        RCLCPP_INFO(this->get_logger(), "Using custom stream message: %s", use_custom_stream_msg ? "true" : "false");
         RCLCPP_INFO(this->get_logger(), "Subscribing to: %s", subscribe_topic.c_str());
         RCLCPP_INFO(this->get_logger(), "Publishing to: %s", publish_topic.c_str());
         RCLCPP_INFO(this->get_logger(), "Skip frame: %d, I-frame only: %s", skip_frame_, i_frame_only_ ? "true" : "false");

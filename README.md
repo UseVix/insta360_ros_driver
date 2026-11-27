@@ -1,7 +1,9 @@
 # CHANGES OF THIS FORK
 - Dynamic parameters change works correctly
 - Equirectangular node is now more efficient
-- Perspective node have been added. You can control fov through parameters and camera orientation by publishing to: /&#8288;camera_orientation/&#8288;quaternion
+- Perspective node have been added. You can control fov through parameters and camera orientation by publishing to: /camera_orientation/quaternion
+- MediaSDK hardware-accelerated stitcher (`media_sdk_stitcher`) has been added for real-time 360° stitching and FlowState gyro stabilization
+- Video decoders (`ffmpeg_decoder`, `gstreamer_decoder`) and encoder (`gstreamer_encoder`) have been added for flexible H.264 streaming over ROS topics or direct RTP/UDP
 
 # insta360_ros_driver
 
@@ -11,32 +13,110 @@ A ROS driver for the Insta360 cameras. This driver is tested on Ubuntu 22.04 wit
 - 2304 x 1152
 - 1920 x 960
 
-You can change [this line](https://github.com/ai4ce/insta360_ros_driver/blob/79588d9e0e9d029c3371d4095ea718daaf1e06fb/src/main.cpp#L126) to edit the resolution.
+Set the `video_resolution` parameter of the camera driver (see `config/insta360_ros_driver.yaml`) to change the resolution.
 
-## Installation
+## Driver Download
 To use this driver, you need to first have Insta360 SDK. Please apply for the SDK from the [Insta360 website](https://www.insta360.com/sdk/home). 
 
 For additional instructions, see this [post](https://github.com/ai4ce/insta360_ros_driver/issues/10#issuecomment-3371481987).
 
-**Note: Please make you use the latest SDK. This package works with the SDK posted after April 23, 2025**
+**Note: Please make sure you use the latest SDK.** This package is tested with CameraSDK 2.2.4 and MediaSDK 3.2.0 (Linux x86_64). Older SDKs might not be compatible.
 
-```
+```bash
 cd ~/ros2_ws/src
 git clone -b humble https://github.com/ai4ce/insta360_ros_driver
 cd ..
 ```
-Then, the Insta360 libraries need to be installed as follows:
-- add the <code>camera</code> and <code>stream</code> header files inside the <code>include</code> directory
-- add the <code>libCameraSDK.so</code> library under the <code>lib</code> directory.
+If you already have archive with Insta360 SDK
+1. Choose version of CameraSDK comaptible with your architecture
+2. add the <code>camera</code> and <code>stream</code> header files inside the <code>include</code> directory
+3. add the <code>libCameraSDK.so</code> library under the <code>lib</code> directory.
 
-Afterwards, install the other required dependencies and build
+
+### MediaSDK Installation (Optional for Hardware Stitching)
+The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera's H.264/H.265 access units and IMU data and returns stitched frames. It is only needed for `media_sdk_stitcher`: without it the rest of the package still builds, and CMake prints `Insta360 MediaSDK not found: media_sdk_stitcher will not be built`.
+
+1. Copy the MediaSDK header files (the `include/*.h` files in the MediaSDK archive) into `include/media_sdk`.
+2. Install the MediaSDK runtime package.  On host, run:
+   ```
+   sudo apt install <MediaSDK .deb file>
+   ```
+   For the [Docker installation](#docker-installation), copy `.deb` file into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
+
+CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x <MediaSDK .deb file> <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
+```bash
+colcon build --symlink-install --cmake-args \
+  -DINSTA360_MEDIA_SDK_ROOT=<dir with lib/libMediaSDK.so>/opt/MediaSDK-<version>-linux
 ```
+For the [Docker installation](#docker-installation), copy `MediaSDK-<version>-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. 
+
+
+## Installation
+
+You can proceed either with manual install or docker install.
+### Manual Installation
+Install the dependencies (including GStreamer and FFmpeg) and build:
+```bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
+Skip to the [usage](#usage) section below to proceed.
 
-Before continuing, **make sure the camera is set to dual-lens mode**
+### Docker Installation
+
+A docker container is available for development and it sets up the Zenoh RMW for best performance. Run the following: 
+
+```
+xhost +local:root
+cd docker
+docker compose down && docker compose up --build
+```
+
+Once you see the following message: 
+
+```
+insta360_ros_driver  | #All required rosdeps installed successfully
+insta360_ros_driver  | Starting >>> insta360_ros_driver
+insta360_ros_driver  | Finished <<< insta360_ros_driver [0.23s]
+insta360_ros_driver  | 
+insta360_ros_driver  | Summary: 1 package finished [0.35s]
+insta360_ros_driver  | ================================
+insta360_ros_driver  |  Insta360 Docker Container Ready
+insta360_ros_driver  |  Run 'docker exec -it insta360_ros_driver bash'
+insta360_ros_driver  | ================================
+``` 
+
+in the build log, you can detach with 'd' and enter the container via:
+
+```
+docker exec -it insta360_ros_driver bash
+ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
+Then in another terminal, run:
+```
+docker exec -it insta360_ros_driver bash
+ros2 launch insta360_ros_driver bringup.launch.xml
+```
+
+This will start the camera. You can use rqt in a third terminal to view the image
+
+```
+docker exec -it insta360_ros_driver bash
+ros2 run rqt_image_view rqt_image_view
+```
+
+If you know how to use [tmux](https://github.com/tmux/tmux/wiki), the container also installs it and makes it easier to create multiple windows.
+
+The topics can also be accessed from host if you install Zenoh RMW on host. Tutorials are available [here](https://docs.ros.org/en/humble/Installation/RMW-Implementations/Non-DDS-Implementations/Working-with-Zenoh.html). In general Zenoh is very good for high bandwidth data and is the recommendation for this.
+
+
+
+
+
+### Camera Setup
+Before continuing, **make sure the camera is set to dual-lens mode**.
 
 Additionally, **ensure the camera's USB mode is set to Android**:
 1. On the camera, swipe down the screen to the main menu
@@ -45,91 +125,532 @@ Additionally, **ensure the camera's USB mode is set to Android**:
 4. This is required for the ROS driver to properly detect and communicate with the camera (see [Issue #4](https://github.com/ai4ce/insta360_ros_driver/issues/4))
 
 The Insta360 requires sudo privilege to be accessed via USB. To compensate for this, a udev configuration can be automatically created that will only request for sudo once. The camera can thus be setup initially via:
-```
+```bash
 cd ~/ros2_ws/src/insta360_ros_driver
 ./setup.sh
 ```
-This creates a symlink  based on the vendor ID of Insta360 cameras. The symlink, in this case <code>/dev/insta</code> is used to grant permissions to the usb port used by the camera.
+
+This creates a symlink based on the vendor ID of Insta360 cameras. The symlink, in this case <code>/dev/insta</code> is used to grant permissions to the usb port used by the camera.
+
 
 ![setup](docs/setup.png)
 
 **Sometimes, this does not work (e.g. you see "device /dev/insta not found" or something similar). You can try entering the commands manually, since that sometimes sees success, especially for the first time.**
-```
+```bash
 echo SUBSYSTEM=='"usb"', ATTR{manufacturer}=='"Arashi Vision"', SYMLINK+='"insta"', MODE='"0777"' | sudo tee /etc/udev/rules.d/99-insta.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 sudo chmod 777 /dev/insta
 ```
+The Insta360 X3 (and potentially other models) needs a micro-sd card inserted to use the API. Ensure this is done.
 
-## Usage
-The camera provides images natively in H264 compressed image format. We have a decoder node that 
+## Nodes & CLI Usage
+Every node in this package can be run individually from the command line using `ros2 run`. All nodes accept configuration files via `--params-file` from the `config/` directory or direct parameter overrides.
 
-### Camera Bringup
-The camera can be brought up with the following launch file
-```
-ros2 launch insta360_ros_driver bringup.launch.xml
-```
-![bringup](docs/bringup_rqt.png)
 
-A dual fisheye image will be published.
-
-![dual_fisheye](docs/dual_fisheye.png)
+### 1. Camera Driver (`insta360_ros_driver`)
+Connects directly to the Insta360 camera hardware over USB, synchronizes system time to the camera, initializes live video streaming, and broadcasts compressed video packets alongside raw inertial motion measurements and camera telemetry. The compressed stream is dual fisheye image.
 
 #### Published Topics
-- /dual_fisheye/image
-- /dual_fisheye/image/compressed
-- /equirectangular/image
-- /imu/data
-- /imu/data_raw
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image/compressed_stream` | `compressed_stream_topic` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Stream packets containing compressed H.264/H.265 payload, stream type, and lens index |
+| `imu/data_raw` | `imu_topic` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry (angular velocity and linear acceleration) |
+| `/camera/exposure_data` | `exposure_data_topic` | `insta360_ros_driver/msg/ExposureData` | Camera exposure time and timestamp metadata |
+| `/insta360/camera_preview_info` | `camera_preview_info_topic` | `insta360_ros_driver/msg/CameraPreviewInfo` | Latched camera preview parameters, crop offsets, sweep time, and calibration info |
 
-The launch file has the following optional arguments:
-- equirectangular (default="false")
+#### Services
+| Service Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/insta360/clock_sync` | `clock_sync_service` | `insta360_ros_driver/srv/ClockSync` | Estimates the offset between the node's ROS clock (`get_clock()->now()`) and the camera's media clock. Available once live streaming has started |
 
-This publishes equirectangular images. You can configure these parameters in `config/equirectangular.yaml`.
-![equirectangular](docs/equirectangular.png)
+On each request the driver queries `GetCameraMediaTime()` `clock_sync_samples` times and uses the query with the smallest round trip (the same method as the latency measurement's clock sync, which uses the host monotonic clock instead of the ROS clock). The response contains:
 
-- imu_filter (default="true")
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `success` | `bool` | `false` if the camera returned no valid media time |
+| `message` | `string` | `ok`, or the reason for the failure |
+| `rtt_ms` | `float64` | Round trip of the selected query (ms) |
+| `camera_time_ms` | `int64` | Camera media time returned by the selected query (ms) |
+| `offset_ms` | `float64` | ROS clock at the midpoint of the selected query minus `camera_time_ms` (ms) |
 
-This uses the [imu_filter_madgwick](https://wiki.ros.org/imu_filter_madgwick) package to approximate orientation from the IMU. Note that by default, we publish `/imu/data_raw` which only contains linear acceleration and angular velocity. The madgwick filter uses this information to publish orientation to `/imu/data`. You can configure the filter in `config/imu_filter.yaml`. 
+A camera timestamp converts to ROS time as `camera_ms + offset_ms`. The estimate is accurate to about ±`rtt_ms`/2.
 
-![IMU](https://github.com/user-attachments/assets/02b50cad-8415-4dde-9014-9ab3a4d415b9)
-
-## Equirectangular Calibration
-You can adjust the extrinsic parameters used to improve the equirectangular image. 
+```bash
+ros2 service call /insta360/clock_sync insta360_ros_driver/srv/ClockSync
 ```
-# Run the camera driver
+
+#### CLI Usage
+```bash
+ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
+  --params-file config/insta360_ros_driver.yaml
+```
+
+#### Stream, Exposure, Mode & Image Parameters
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `video_resolution` | `1920x960p30` | `3840x1920p30`, `2560x1280p30`, `2304x1152p30`, `1920x960p30`, `1440x720p30`, `960x480p30`, `3840x1920p60`, `2560x1280p60` (support varies by model/firmware) |
+| `video_bitrate` | `524288` | Live stream bitrate in bit/s |
+| `exposure_mode` | `shutter_priority` | `unchanged`, `auto`, `shutter_priority`, `iso_priority`, `manual`, `adaptive`, `full_auto` |
+| `shutter_speed_denominator` | `120` | Shutter = 1/N s (`0` = do not set). Use `100` under 50 Hz lighting to avoid banding |
+| `iso` | `0` | ISO for `manual`/`iso_priority` (`0` = do not set) |
+| `ev_bias` | `0` | Exposure compensation |
+| `video_iso_top_limit` | `0` | Upper ISO limit for auto ISO (`0` = do not set) |
+| `video_sub_mode` | `unchanged` | Camera video mode: `unchanged`, `normal`, `hdr`, `pure`, `liveview`, `loop_recording`, `timelapse`, `timeshift`, `bullet_time`, `slow_motion`, `selfie`, `super`, `dash_cam`, `ptz`. The camera keeps it after the driver exits |
+| `apply_image_settings` | `false` | Apply the `image_*` settings below to the live stream |
+| `image_contrast` / `image_saturation` | `64` | 0..256 |
+| `image_brightness` | `0` | -256..256 |
+| `image_sharpness` | `3` | 0..6 |
+| `image_white_balance` | `auto` | `auto`, `2700k`, `4000k`, `5000k`, `6500k`, `7500k` |
+
+Exposure is applied to the live-stream mode before streaming starts. The applied values and the first exposure time the camera reports are logged; `/camera/exposure_data` shows the exposure time continuously.
+
+A fixed short shutter mostly matters in low light: the exposure time is bounded by the frame period (33 ms at 30 fps), so it saves at most a few tens of milliseconds, but it prevents auto-exposure from lowering the frame rate in dim scenes, which adds much more latency.
+
+#### Latency Measurement
+Set `measure_latency:=true` to log statistics on the path from the camera to the `OnVideoData` callback for each video stream (`stream_index`). In the usual dual-fisheye mode both lenses come in one stream, so only `stream 0` is reported.
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `measure_latency` | `false` | Enable latency instrumentation |
+| `latency_report_period_s` | `5.0` | Interval between statistics reports |
+| `clock_sync_period_s` | `10.0` | Interval between camera/host clock offset re-estimations |
+| `clock_sync_samples` | `30` | `GetCameraMediaTime()` queries per sync (sample with the smallest round trip wins). Also used by the `clock_sync` service |
+
+Each report gives min/mean/p50/p99/max for:
+- **cam->callback**: absolute latency, using the estimated clock offset. Its uncertainty is about ±(sync RTT/2 + 1 ms). It also depends on which moment the camera's timestamp marks (exposure or encode), so check it with an optical test.
+- **inter-arrival**: host time between consecutive packets of the same stream (~33 ms at 30 fps).
+
+```bash
+ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
+  --params-file config/insta360_ros_driver.yaml -p measure_latency:=true
+```
+
+---
+
+### 2. FFmpeg Video Decoder (`ffmpeg_decoder`)
+Decodes compressed H.264 video streams using FFmpeg (`libavcodec`) hardware or software decoding and produces standard uncompressed BGR image frames.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `compressed_topic` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`; defaults to `/dual_fisheye/image/compressed_stream` when `use_custom_stream_msg` is `true`) |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/decoded` | `uncompressed_topic` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
+| `skip_frame` | `int` | `0` | Number of frames to skip between decoded outputs (0 = decode all frames) |
+| `i_frame_only` | `bool` | `false` | When `true`, decodes keyframes (I-frames) only to reduce computational overhead |
+
+#### CLI Usage
+```bash
+# Run with default configuration from config file:
+ros2 run insta360_ros_driver ffmpeg_decoder --ros-args \
+  --params-file config/ffmpeg_decoder.yaml
+
+# To decode raw dual-fisheye camera stream directly:
+ros2 run insta360_ros_driver ffmpeg_decoder --ros-args \
+  -p use_custom_stream_msg:=true \
+  -p uncompressed_topic:=/dual_fisheye/image
+```
+
+---
+
+### 3. GStreamer Video Decoder (`gstreamer_decoder`)
+Decodes compressed H.264 video streams using a configurable GStreamer pipeline and outputs raw BGR images.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `compressed_topic` | `sensor_msgs/msg/CompressedImage` or `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed video stream (type depends on `use_custom_stream_msg`; defaults to `/dual_fisheye/image/compressed_stream` when `use_custom_stream_msg` is `true`) |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/decoded` | `uncompressed_topic` | `sensor_msgs/msg/Image` | Decoded raw BGR image frames |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
+| `pipeline` | `string` | `"appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vah264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
+
+#### CLI Usage
+```bash
+# Run with default configuration from config file:
+ros2 run insta360_ros_driver gstreamer_decoder --ros-args \
+  --params-file config/gstreamer_decoder.yaml
+
+# To decode raw dual-fisheye camera stream directly:
+ros2 run insta360_ros_driver gstreamer_decoder --ros-args \
+  -p use_custom_stream_msg:=true \
+  -p uncompressed_topic:=/dual_fisheye/image
+```
+
+---
+
+### 4. GStreamer Video Encoder (`gstreamer_encoder`)
+Encodes raw uncompressed video frames into H.264 video using GStreamer and transmits the compressed stream either over a ROS topic or as an RTP/UDP network stream.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed BGR image stream to encode |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image/h264` | `output_topic` | `sensor_msgs/msg/CompressedImage` | Encoded H.264 video frames (published when `transport` is `"ros"`) |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `transport` | `string` | `"ros"` | Transmission protocol (`"ros"` or `"udp"`) |
+| `pipeline` | `string` | `"appsrc ! videoconvert ! nvh264enc ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"` | GStreamer pipeline used when `transport` is `"udp"` |
+| `ros_pipeline` | `string` | `"appsrc name=ros_source is-live=true ! videoconvert ! nvh264enc gop-size=30 ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"` | GStreamer pipeline used when `transport` is `"ros"` |
+| `fps` | `double` | `30.0` | Target encoding frame rate |
+
+#### CLI Usage
+```bash
+# Default ROS topic streaming:
+ros2 run insta360_ros_driver gstreamer_encoder --ros-args \
+  --params-file config/gstreamer_encoder.yaml
+
+# Direct RTP/UDP streaming override:
+ros2 run insta360_ros_driver gstreamer_encoder --ros-args \
+  --params-file config/gstreamer_encoder.yaml \
+  -p transport:=udp
+```
+
+#### Timing GStreamer encoding/decoding
+`scripts/gst_timing.sh` toggles GStreamer's built-in `latency` tracer in the current shell by setting or unsetting `GST_TRACERS` and `GST_DEBUG`. Every GStreamer process started from that shell afterwards (`gstreamer_decoder`, `gstreamer_encoder`, `media_sdk_stitcher`, `gst-launch-1.0`) logs to stderr how long each element (encoder, decoder, parser, ...) takes per buffer, plus the total time from `appsrc` to `appsink`. It must be **sourced**:
+```bash
+source scripts/gst_timing.sh   # on if off, off if on
+```
+Times are in nanoseconds.
+
+---
+
+### 5. MediaSDK Hardware Stitcher (`media_sdk_stitcher`)
+Performs real-time hardware-accelerated stitching of dual-fisheye video packets and IMU motion data into stabilized 360° equirectangular panoramas using the Insta360 MediaSDK library. It also estimates and outputs the camera's 3D stabilization orientation quaternion.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image/compressed_stream` | `input_video_topic` | `insta360_ros_driver/msg/CameraCompressedStreamData` | Compressed camera stream packets containing dual-fisheye frames |
+| `/imu/data_raw` | `input_imu_topic` | `sensor_msgs/msg/Imu` | Raw 6-DOF IMU telemetry used for FlowState gyro stabilization |
+| `/camera/exposure_data` | `exposure_data_topic` | `insta360_ros_driver/msg/ExposureData` | Exposure metadata for image stitching illumination correction |
+| `/insta360/camera_preview_info` | `camera_preview_info_topic` | `insta360_ros_driver/msg/CameraPreviewInfo` | Camera crop parameters, optical offset, and timing metadata |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `output_topic` | `sensor_msgs/msg/Image` | Stitched 360° equirectangular panorama image |
+| `/equirectangular/flowstate_orientation` | `orientation_topic` | `geometry_msgs/msg/QuaternionStamped` | Camera 3D stabilization orientation quaternion |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `output_width` | `int` | `1920` | Output panorama width in pixels |
+| `output_height` | `int` | `960` | Output panorama height in pixels |
+| `stitch_type` | `string` | `"dynamicstitch"` | Stitching algorithm (`dynamicstitch`, `template`, `optflow`, `aistitch`) |
+| `enable_flowstate` | `bool` | `true` | Enables FlowState stabilization using IMU telemetry |
+| `enable_direction_lock` | `bool` | `false` | Locks panorama orientation along the forward heading direction |
+| `enable_deflicker` | `bool` | `false` | Suppresses exposure flicker between frames |
+| `enable_defringe` | `bool` | `false` | Corrects chromatic lens fringing artifacts |
+| `disable_stabilization` | `bool` | `true` | Patches libMediaSDK so that no stabilization rotation is applied to the output: the panorama stays fixed to the camera. `orientation_topic` still publishes the stabilizer quaternion (camera attitude). If the patch cannot be installed (e.g. a different SDK build), an error is logged and the output stays stabilized. Keep `enable_flowstate` `true`, since libMediaSDK crashes without the stabilizer |
+
+#### CLI Usage
+```bash
+ros2 run insta360_ros_driver media_sdk_stitcher --ros-args \
+  --params-file config/media_sdk_stitcher.yaml
+```
+
+##### FlowState Orientation & Internal Stabilizer Offset (`find_stabilizer_offset.py`)
+MediaSDK computes 3D camera stabilization orientations internally via `arvrender::SequenceStabilizer`. Because the offset is private to `libMediaSDK.so`, upgrading or changing the MediaSDK `.deb` package can change this memory offset.
+To detect the offset:
+```bash
+# Direct execution (auto-detects libMediaSDK.so):
+./src/insta360_ros_driver/scripts/find_stabilizer_offset.py
+# Or via ROS 2:
+ros2 run insta360_ros_driver find_stabilizer_offset.py
+```
+The code uses `0x298`, the offset in MediaSDK 3.2.0 (it was `0x260` in 3.1.1). If the detected offset differs, update the hex value in `src/media_sdk_stitcher.cpp` and rebuild.
+
+---
+
+### 6. Dual-Fisheye to Equirectangular Stitcher (`dual_fisheye2equirectangular_cpp`)
+Stitches uncompressed dual-fisheye images into 360° equirectangular panoramas using OpenCV remapping on CPU or GPU with configurable lens alignment calibrations.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `output_topic` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `cx_offset` | `double` | `0.0` | (dynamically reconfigurable) Horizontal optical center shift for fisheye lenses in pixels |
+| `cy_offset` | `double` | `0.0` | (dynamically reconfigurable) Vertical optical center shift for fisheye lenses in pixels |
+| `crop_size` | `int` | `0` | (dynamically reconfigurable) Crop region diameter in pixels (0 = auto-computed from image dimensions) |
+| `translation` | `double[]` | `[0.0, 0.0, -0.105]` | (dynamically reconfigurable) Extrinsic translation vector `[x, y, z]` between lenses in meters |
+| `rotation_deg` | `double[]` | `[-0.5, 0.0, 1.1]` | (dynamically reconfigurable) Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
+| `gpu` | `bool` | `true` | (dynamically reconfigurable) Enables GPU-accelerated remap (falls back to CPU if OpenCV CUDA is unavailable) |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output equirectangular image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output equirectangular image in pixels |
+
+#### CLI Usage
+```bash
+ros2 run insta360_ros_driver dual_fisheye2equirectangular_cpp --ros-args \
+  --params-file config/dual_fisheye2equirectangular.yaml
+
+```
+
+---
+
+
+### 7. Dual-Fisheye to Perspective View (`dual_fisheye2perspective_cpp`)
+Generates a virtual rectilinear perspective camera viewport directly from uncompressed dual-fisheye images with configurable field of view and real-time viewing orientation control.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/dual_fisheye/image` | `input_topic` | `sensor_msgs/msg/Image` | Uncompressed dual-fisheye input image frame |
+| `/camera_orientation/quaternion` | `camera_orientation_topic` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective camera direction |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/perspective/image` | `output_topic` | `sensor_msgs/msg/Image` | Rectilinear perspective view image |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `cx_offset` | `double` | `0.0` | (dynamically reconfigurable) Horizontal optical center shift for fisheye lenses in pixels |
+| `cy_offset` | `double` | `0.0` | (dynamically reconfigurable) Vertical optical center shift for fisheye lenses in pixels |
+| `crop_size` | `int` | `0` | (dynamically reconfigurable) Crop region diameter in pixels (0 = auto-computed from image dimensions) |
+| `translation` | `float[]` | `[0.0, 0.0, -0.105]` | (dynamically reconfigurable) Extrinsic translation vector `[x, y, z]` between lenses in meters |
+| `rotation_deg` | `float[]` | `[-0.5, 0.0, 1.1]` | (dynamically reconfigurable) Extrinsic Euler rotation angles `[roll, pitch, yaw]` in degrees |
+| `gpu` | `bool` | `true` | (dynamically reconfigurable) Enables GPU-accelerated remap |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output perspective image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output perspective image in pixels |
+| `horizontal_fov` | `double` | `120.0` | (dynamically reconfigurable) Horizontal field of view in degrees |
+| `vertical_fov` | `double` | `81.7867893` | (dynamically reconfigurable) Vertical field of view in degrees |
+
+#### CLI Usage
+```bash
+ros2 run insta360_ros_driver dual_fisheye2perspective_cpp --ros-args \
+  --params-file config/dual_fisheye2perspective.yaml
+```
+
+---
+
+### 8. Equirectangular to Perspective View (`equirectangular2perspective_cpp`)
+Extracts a rectilinear perspective virtual camera view from a stitched 360° equirectangular panorama with configurable field of view and dynamic orientation control.
+
+#### Subscribed Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `input_topic` | `sensor_msgs/msg/Image` | Stitched equirectangular panorama image |
+| `/camera_orientation/quaternion` | `camera_orientation_topic` | `geometry_msgs/msg/Quaternion` | Orientation quaternion to dynamically steer the perspective viewport direction |
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/perspective/image` | `output_topic` | `sensor_msgs/msg/Image` | Extracted rectilinear perspective image |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `out_width` | `int` | `1920` | (dynamically reconfigurable) Width of output perspective image in pixels |
+| `out_height` | `int` | `960` | (dynamically reconfigurable) Height of output perspective image in pixels |
+| `horizontal_fov` | `double` | `120.0` | (dynamically reconfigurable) Horizontal field of view in degrees |
+| `vertical_fov` | `double` | `81.7867893` | (dynamically reconfigurable) Vertical field of view in degrees |
+
+#### CLI Usage
+```bash
+ros2 run insta360_ros_driver equirectangular2perspective_cpp --ros-args \
+  --params-file config/equirectangular2perspective.yaml
+```
+
+---
+
+### 9. Webcam Equirectangular Node (`webcam_equirectangular`)
+Captures video frames from standard UVC webcam devices, verifies 2:1 aspect ratio, and outputs raw equirectangular video frames. The video is equirectangular image pre-stitched by camera
+
+#### Published Topics
+| Topic Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/equirectangular/image` | `topic` | `sensor_msgs/msg/Image` | Captured raw equirectangular video frames |
+
+#### Parameters
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `device` | `string` | `"/dev/video0"` | Path to Video4Linux webcam device node |
+| `width` | `int` | `2880` | Frame capture width in pixels |
+| `height` | `int` | `1440` | Frame capture height in pixels |
+| `fps` | `double` | `30.0` | Frame capture rate in FPS |
+| `pixel_format` | `string` | `"MJPG"` | V4L2 pixel capture format (`"MJPG"` or `"YUYV"`) |
+
+#### CLI Usage
+```bash
+# Query available resolutions and formats:
+v4l2-ctl --list-devices
+v4l2-ctl --list-formats-ext -d /dev/video0
+
+# Run webcam node:
+ros2 run insta360_ros_driver webcam_equirectangular --ros-args \
+  --params-file config/webcam_equirectangular.yaml
+```
+
+---
+
+### 10. Extrinsic Calibration Tool (`calibrate_cpp.py`)
+Provides an interactive graphical calibration interface to visually tune the extrinsic calibration offsets (`cx_offset`, `cy_offset`, `crop_size`, `translation`, `rotation_deg`) of the projection stitcher.
+
+#### CLI Usage
+```bash
+# 1. Run camera driver and decoder:
 ros2 run insta360_ros_driver insta360_ros_driver
-# Activate image decoding
-ros2 run insta360_ros_driver decoder
-# Run the equirectangular node in calibration mode
-ros2 run insta360_ros_driver equirectangular.py --calibrate
-```
-This will open an app to adjust the extrinsics. You can press 's' to get the parameters in YAML format. **Note that you need to press 'a' to update the image preview after changing the intrinsics with the GUI**
-![Equirectangular Calibration](docs/calibration.png)
+ros2 run insta360_ros_driver ffmpeg_decoder --ros-args \
+  -p use_custom_stream_msg:=true \
+  -p uncompressed_topic:=/dual_fisheye/image
 
-Pressing 's' will return the parameters via the terminal. You can copy paste this onto the configuration file as needed. By default, the launch file reads this from `config/equirectangular.yaml`
-
+# 2. Launch interactive calibration GUI targeting stitcher node:
+ros2 run insta360_ros_driver calibrate_cpp.py \
+  --ros-args -p target_node:=dual_fisheye2equirectangular_node
 ```
-==================================================
-CALIBRATION PARAMETERS (YAML FORMAT)
-==================================================
-equirectangular_node:
+The tool prints the resulting YAML configuration block directly to the terminal when finished:
+```yaml
+dual_fisheye2equirectangular_node:
   ros__parameters:
     cx_offset: 0.0
     cy_offset: 0.0
     crop_size: 960
     translation: [0.0, 0.0, -0.105]
     rotation_deg: [-0.5, 0.0, 1.1]
-    gpu: True
+    gpu: true
     out_width: 1920
     out_height: 960
-==================================================
 ```
 
-Note that decode.py will most likely drop frames depending on your system. If you do not care about live processing, you can simply record the `/dual_fisheye/image/compressed` topic and decompress it later after recording.
+
+---
+
+## Launch Files
+Instead of running nodes individually, the package provides complete launch files for bringup and stream reception.
+
+### 1. Camera Bringup (`bringup.launch.xml`)
+Brings up the camera driver, stitcher, IMU orientation filter, perspective projection nodes, and video stream encoder in a single command.
+
+```bash
+ros2 launch insta360_ros_driver bringup.launch.xml
 ```
-ros2 bag record /dual_fisheye/image /imu/data_raw
+
+![bringup](docs/bringup_rqt.png)
+
+#### Launch Arguments & Configuration
+All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` files in the `config/` directory. Each node can be toggled on/off, and its configuration file path can be customized via launch arguments:
+
+| Argument | Default | Description |
+| :--- | :--- | :--- |
+| `webcam_equirectangular` | `false` | Capture pre-stitched equirectangular frames directly from camera via V4L2 webcam mode (`webcam_equirectangular`). Disables `insta360_ros_driver` and `media_sdk_stitcher`. |
+| `webcam_equirectangular_config` | `config/webcam_equirectangular.yaml` | Path to YAML config for `webcam_equirectangular` |
+| `camera_driver_config` | `config/insta360_ros_driver.yaml` | Path to YAML config for camera driver (`insta360_ros_driver`) |
+| `media_sdk_stitcher` | `true` | Hardware-accelerated MediaSDK real-time stitcher (`/equirectangular/image`). Active only when `webcam_equirectangular` is `false`. |
+| `media_sdk_stitcher_config` | `config/media_sdk_stitcher.yaml` | Path to YAML config for `media_sdk_stitcher` |
+| `gstreamer_encoder` | `true` | GStreamer video encoder and streaming node |
+| `gstreamer_encoder_config` | `config/gstreamer_encoder.yaml` | Path to YAML config for `gstreamer_encoder` |
+| `udp` | `false` | Transmission mode: `false` for ROS topic (`/equirectangular/image/h264`), `true` for direct RTP/UDP |
+| `ffmpeg_decoder` | `false` | FFmpeg video decoder node (decodes compressed H.264 streams to raw images) |
+| `ffmpeg_decoder_config` | `config/ffmpeg_decoder.yaml` | Path to YAML config for `ffmpeg_decoder` |
+| `dual_fisheye2equirectangular` | `false` | CPU/OpenCV remap stitcher (`dual_fisheye2equirectangular_cpp`) |
+| `dual_fisheye2equirectangular_config` | `config/dual_fisheye2equirectangular.yaml` | Path to YAML config for OpenCV stitcher |
+| `dual_fisheye2perspective` | `false` | Perspective view from dual-fisheye frames |
+| `dual_fisheye2perspective_config` | `config/dual_fisheye2perspective.yaml` | Path to YAML config for `dual_fisheye2perspective` |
+| `equirectangular2perspective` | `true` | Perspective view from equirectangular frames |
+| `equirectangular2perspective_config` | `config/equirectangular2perspective.yaml` | Path to YAML config for `equirectangular2perspective` |
+| `imu_filter` | `true` | Madgwick IMU orientation filter (`imu_filter_madgwick`) |
+| `imu_config` | `config/imu_filter.yaml` | Path to YAML config for IMU filter |
+| `decouple_flowstate` | `true` | Republishes the stitcher's `/equirectangular/flowstate_orientation` as `/camera_orientation/quaternion`, so the perspective nodes follow the orientation FlowState used and the view is decoupled from the stabilization rotation |
+| `display_flowstate_orientation` | `true` | Republishes `/equirectangular/flowstate_orientation` as a `geometry_msgs/msg/PoseStamped` on `/pose_out` and publishes a static identity `map` -> `camera_frame` TF, so the orientation can be viewed in RViz2 |
+
+
+
+#### Bringup Examples:
+- **Default (Camera USB SDK + MediaSDK hardware stitching + ROS H.264 streaming):**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml
+  ```
+- **Webcam Mode (direct on-camera stitched equirectangular frames via V4L2):**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml webcam_equirectangular:=true
+  ```
+- **Direct RTP/UDP streaming:**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml udp:=true
+  ```
+- **Turn off video streaming:**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml gstreamer_encoder:=false
+  ```
+- **Enable video stream decoding via FFmpeg:**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml ffmpeg_decoder:=true
+  ```
+- **Use CPU OpenCV stitcher instead of MediaSDK:**
+  ```bash
+  ros2 launch insta360_ros_driver bringup.launch.xml media_sdk_stitcher:=false dual_fisheye2equirectangular:=true
+  ```
+
+---
+
+### 2. Stream Reception (`receiver.launch.xml`)
+Client-side launch file to receive and decode the video stream sent by `gstreamer_encoder`. It supports both ROS topic decoding and direct UDP display via the `udp` boolean switch:
+
+| Argument | Default | Description |
+| :--- | :--- | :--- |
+| `udp` | `false` | `false` for ROS topic decoding via `gstreamer_decoder`, `true` for direct RTP/UDP reception |
+| `gstreamer_decoder_config` | `config/gstreamer_decoder.yaml` | Path to YAML config for `gstreamer_decoder` |
+| `udp_port` | `5000` | UDP port to listen on in UDP mode |
+| `udp_pipeline` | `gst-launch-1.0 udpsrc ...` | Custom GStreamer command line executed in UDP mode |
+
+#### Receiver Examples:
+- **ROS topic mode (default):** Decodes `/equirectangular/image/h264` to `/equirectangular/image/decoded` using `gstreamer_decoder`:
+  ```bash
+  ros2 launch insta360_ros_driver receiver.launch.xml
+  ```
+- **Direct UDP mode:** Launches a `gst-launch-1.0` pipeline process via `<executable>` to display incoming UDP frames directly in `autovideosink`:
+  ```bash
+  ros2 launch insta360_ros_driver receiver.launch.xml udp:=true
+  # With custom UDP port:
+  ros2 launch insta360_ros_driver receiver.launch.xml udp:=true udp_port:=5000
+  ```
+- **Direct UDP reception from command line without ROS:**
+  ```bash
+  gst-launch-1.0 udpsrc port=5000 caps="application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000" ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink
+  ```
+
+---
+
+### 3. Alternative Python Pipeline (`working_pipeline.launch.py`)
+An alternative python-based launch pipeline launching the driver, `ffmpeg_decoder` directly consuming the custom stream packets to decode `/dual_fisheye/image`, and OpenCV stitcher (`dual_fisheye2equirectangular_cpp`):
+```bash
+ros2 launch insta360_ros_driver working_pipeline.launch.py
 ```
+
+---
 
 ## Star History
 

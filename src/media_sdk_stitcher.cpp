@@ -1,0 +1,300 @@
+#include <ins_realtime_stitcher.h>
+#include <ins_stitcher.h>
+
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include "insta360_ros_driver/msg/camera_preview_info.hpp"
+#include "insta360_ros_driver/msg/exposure_data.hpp"
+#include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
+
+#include <geometry_msgs/msg/quaternion_stamped.hpp>
+
+#include "stabilization_patch.hpp"
+
+#include <cstring>
+#include <mutex>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace arvrender {
+struct Quat {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+class SequenceStabilizer {
+public:
+    Quat GetStabilizerQuaternion(double timestamp);
+    Quat GetDirectionalQuaternion(double timestamp);
+};
+}
+
+class MediaSdkStitcherNode : public rclcpp::Node
+{
+public:
+    MediaSdkStitcherNode()
+        : Node("media_sdk_stitcher")
+    {
+        declare_parameter("input_video_topic", "/dual_fisheye/image/compressed_stream");
+        declare_parameter("input_imu_topic", "/imu/data_raw");
+        declare_parameter("output_topic", "/equirectangular/image");
+        declare_parameter("orientation_topic", "/equirectangular/flowstate_orientation");
+        declare_parameter("exposure_data_topic", "/camera/exposure_data");
+        declare_parameter("camera_preview_info_topic", "/insta360/camera_preview_info");
+        declare_parameter("output_width", 1920);
+        declare_parameter("output_height", 960);
+        declare_parameter("stitch_type", "dynamicstitch");
+        declare_parameter("enable_flowstate", true);
+        declare_parameter("enable_direction_lock", false);
+        declare_parameter("enable_deflicker", false);
+        declare_parameter("enable_defringe", false);
+        // "sdk": the SDK's stabilization rotation is applied to the output (FlowState / direction lock).
+        // "none": no rotation is applied; the equirectangular image stays fixed to the camera.
+        declare_parameter("disable_stabilization", true);
+
+        ins::InitEnv();
+        ins::SetModelFileRootDir(MEDIA_SDK_MODEL_DIR);
+        ins::SetLogLevel(ins::InsLogLevel::WARNING);
+        stitcher_ = std::make_shared<ins::RealTimeStitcher>();
+
+        output_pub_ = create_publisher<sensor_msgs::msg::Image>(
+            get_parameter("output_topic").as_string(), rclcpp::SensorDataQoS());
+        orientation_pub_ = create_publisher<geometry_msgs::msg::QuaternionStamped>(
+            get_parameter("orientation_topic").as_string(), rclcpp::QoS(1).reliable());
+        // Use RELIABLE QoS(10) to match publisher and prevent packet drops
+        video_sub_ = create_subscription<insta360_ros_driver::msg::CameraCompressedStreamData>(
+            get_parameter("input_video_topic").as_string(), rclcpp::QoS(10),
+            std::bind(&MediaSdkStitcherNode::video_callback, this, std::placeholders::_1));
+        imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+            get_parameter("input_imu_topic").as_string(), rclcpp::SensorDataQoS(),
+            std::bind(&MediaSdkStitcherNode::imu_callback, this, std::placeholders::_1));
+        exposure_sub_ = create_subscription<insta360_ros_driver::msg::ExposureData>(
+            get_parameter("exposure_data_topic").as_string(), rclcpp::SystemDefaultsQoS(),
+            std::bind(&MediaSdkStitcherNode::exposure_callback, this, std::placeholders::_1));
+        rclcpp::QoS metadata_qos(1);
+        metadata_qos.reliable().transient_local();
+        metadata_sub_ = create_subscription<insta360_ros_driver::msg::CameraPreviewInfo>(
+            get_parameter("camera_preview_info_topic").as_string(), metadata_qos,
+            std::bind(&MediaSdkStitcherNode::metadata_callback, this, std::placeholders::_1));
+        RCLCPP_INFO(get_logger(), "Waiting for camera preview metadata");
+    }
+
+    ~MediaSdkStitcherNode() override
+    {
+        if (stitcher_) {
+            stitcher_->CancelStitch();
+        }
+    }
+
+private:
+    static int64_t stamp_to_ms(const builtin_interfaces::msg::Time& stamp)
+    {
+        return static_cast<int64_t>(stamp.sec) * 1000LL + stamp.nanosec / 1000000;
+    }
+
+    void metadata_callback(const insta360_ros_driver::msg::CameraPreviewInfo::SharedPtr msg)
+    {
+        if (configured_) {
+            return;
+        }
+        configure_stitcher(*msg);
+        stitcher_->StartStitch();
+        configured_ = true;
+        RCLCPP_INFO(get_logger(), "MediaSDK configured automatically for %s", msg->camera_name.c_str());
+    }
+
+    void configure_stitcher(const insta360_ros_driver::msg::CameraPreviewInfo& preview)
+    {
+        ins::CameraInfo camera_info;
+        camera_info.cameraName = preview.camera_name;
+        const auto decode_type = preview.decode_type;
+        camera_info.decode_type = decode_type == "h265"
+            ? ins::VideoDecodeType::kH265 : ins::VideoDecodeType::kH264;
+        camera_info.SetCalibration(
+            preview.camera_offset,
+            preview.crop_src_width, preview.crop_src_height,
+            preview.crop_dst_width, preview.crop_dst_height,
+            preview.crop_offset_x, preview.crop_offset_y);
+        stitcher_->SetCameraInfo(camera_info);
+
+        const auto stitch_type = get_parameter("stitch_type").as_string();
+        if (stitch_type == "template") {
+            stitcher_->SetStitchType(ins::STITCH_TYPE::TEMPLATE);
+        } else if (stitch_type == "optflow") {
+            stitcher_->SetStitchType(ins::STITCH_TYPE::OPTFLOW);
+        } else if (stitch_type == "aistitch") {
+            stitcher_->SetStitchType(ins::STITCH_TYPE::AIFLOW);
+        } else {
+            stitcher_->SetStitchType(ins::STITCH_TYPE::DYNAMICSTITCH);
+        }
+        stitcher_->SetOutputSize(
+            get_parameter("output_width").as_int(),
+            get_parameter("output_height").as_int());
+        
+        bool disable_stabilization = get_parameter("disable_stabilization").as_bool();
+        if (disable_stabilization ) {
+            std::string error;
+            const bool installed = insta360_ros_driver::install_patch(error);
+            if (installed) {
+                stabilization_disabled_ = true;
+                RCLCPP_INFO(get_logger(),
+                    "stabilization SDK stabilization rotation disabled, output stays fixed to the camera. "
+                    "%s still publishes the stabilizer quaternion (camera attitude), not the applied rotation (identity).",
+                    get_parameter("orientation_topic").as_string().c_str());
+            } else {
+                RCLCPP_ERROR(get_logger(),
+                    "stabilization could not disable the SDK stabilization rotation (%s). "
+                    "Falling back to SDK stabilization; output images ARE stabilized.", error.c_str());
+            }
+        } 
+
+        bool flowstate = get_parameter("enable_flowstate").as_bool();
+        if (!flowstate) {
+            // The stabilizer object must exist even when its rotation is not applied:
+            // libMediaSDK dereferences it for every frame and crashes without it.
+             RCLCPP_WARN(get_logger(),
+                "MediaSDK RealTimeStitcher requires FlowState stabilization enabled to avoid a null stabilizer crash in libMediaSDK.");
+        }
+        stitcher_->EnableFlowState(flowstate);
+        stitcher_->EnableDirectionLock(get_parameter("enable_direction_lock").as_bool());
+        stitcher_->EnableDeflicker(get_parameter("enable_deflicker").as_bool());
+        stitcher_->EnableDefringe(get_parameter("enable_defringe").as_bool());
+        stitcher_->SetStitchRealTimeDataCallback(
+            [this](uint8_t* data[4], int linesize[4], int width, int height,
+                   int format, int64_t timestamp) {
+                publish_frame(data, linesize, width, height, format, timestamp);
+            });
+        stitcher_->SetStitchStateCallback(
+            [this](int error, const char* info) {
+                RCLCPP_ERROR(get_logger(), "MediaSDK stitch error %d: %s", error,
+                             info ? info : "unknown");
+            });
+    }
+
+    void video_callback(const insta360_ros_driver::msg::CameraCompressedStreamData::SharedPtr msg)
+    {
+        if (!configured_) {
+            return;
+        }
+        if (msg->data.format != "h264" && msg->data.format != "h265") {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                                 "Expected h264/h265 input, got '%s'", msg->data.format.c_str());
+            return;
+        }
+        // MediaSDK silently drops packets unless the stream type is one of the camera's
+        // own values: 0x20 is a single stream carrying both lenses, which is what the
+        // driver publishes (0x21/0x22 are the two halves of a dual-stream camera).
+        // TODO check if the units are right. There is inconsistency between comments in headers and what reverse engineering of sdk makes you think.
+        stitcher_->HandleVideoData(
+            msg->data.data.data(), msg->data.data.size(), stamp_to_ms(msg->data.header.stamp),
+            msg->stream_type, msg->stream_index);
+
+    }
+
+    void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
+    {
+        if (!configured_) {
+            return;
+        }
+        ins::GyroData gyro{};
+        // Both video and gyro timestamps must be aligned in milliseconds
+        gyro.timestamp = stamp_to_ms(msg->header.stamp);
+        gyro.ax = msg->linear_acceleration.x / 9.80665;
+        gyro.ay = msg->linear_acceleration.y / 9.80665;
+        gyro.az = msg->linear_acceleration.z / 9.80665;
+        gyro.gx = msg->angular_velocity.x;
+        gyro.gy = msg->angular_velocity.y;
+        gyro.gz = msg->angular_velocity.z;
+        stitcher_->HandleGyroData(std::vector<ins::GyroData>{gyro});
+    }
+
+    void exposure_callback(const insta360_ros_driver::msg::ExposureData::SharedPtr msg)
+    {
+        if (!configured_) {
+            return;
+        }
+        ins::ExposureData exposure{};
+        // Exposure timestamp is already provided in milliseconds by camera SDK
+        exposure.timestamp = msg->timestamp;
+        exposure.exposure_time = msg->exposure_time;
+        stitcher_->HandleExposureData(exposure);
+    }
+
+    void publish_frame(uint8_t* data[4], int linesize[4], int width, int height,
+                       int format, int64_t timestamp)
+    {
+        if (!data[0] || width <= 0 || height <= 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(publish_mutex_);
+        
+        sensor_msgs::msg::Image output;
+        output.header.stamp.sec = static_cast<int32_t>(timestamp / 1000000);
+        output.header.stamp.nanosec = static_cast<uint32_t>((timestamp % 1000000) * 1000);
+        output.header.frame_id = "camera_frame";
+        output.height = height;
+        output.width = width;
+        output.encoding = format == 0 ? "rgba8" : "bgra8";
+        output.step = width * 4;
+        output.data.resize(output.step * height);
+        for (int row = 0; row < height; ++row) {
+            std::memcpy(&output.data[row * output.step], data[0] + row * linesize[0], output.step);
+        }
+        output_pub_->publish(output);
+
+        // Extract internal FlowState stabilization quaternion if available
+        if (stitcher_) {
+            void* stitcher_raw = stitcher_.get();
+            void* imp = *reinterpret_cast<void**>(stitcher_raw);
+            if (imp) {
+                auto* stabilizer = *reinterpret_cast<arvrender::SequenceStabilizer**>(
+                    reinterpret_cast<char*>(imp) + 0x298);  // MediaSDK 3.2.0 (0x260 in 3.1.1)
+                if (stabilizer) {
+                    try {
+                        auto q = stabilizer->GetStabilizerQuaternion(static_cast<double>(timestamp));
+                        geometry_msgs::msg::QuaternionStamped quat_msg;
+                        quat_msg.header = output.header;
+                        quat_msg.quaternion.x = q.x;
+                        quat_msg.quaternion.y = q.y;
+                        quat_msg.quaternion.z = q.z;
+                        quat_msg.quaternion.w = q.w;
+                        orientation_pub_->publish(quat_msg);
+
+                    } catch (...) {
+                        // Stabilizer might not have enough samples yet
+                    }
+                }
+            }
+        }
+
+    }
+
+    std::shared_ptr<ins::RealTimeStitcher> stitcher_;
+    bool configured_ = false;
+    bool stabilization_disabled_ = false;
+    bool patch_checked_ = false;
+    int frames_published_ = 0;
+    rclcpp::Subscription<insta360_ros_driver::msg::CameraCompressedStreamData>::SharedPtr video_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<insta360_ros_driver::msg::ExposureData>::SharedPtr exposure_sub_;
+    rclcpp::Subscription<insta360_ros_driver::msg::CameraPreviewInfo>::SharedPtr metadata_sub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr output_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr orientation_pub_;
+    std::mutex publish_mutex_;
+};
+
+int main(int argc, char** argv)
+{
+    rclcpp::init(argc, argv);
+    try {
+        rclcpp::spin(std::make_shared<MediaSdkStitcherNode>());
+    } catch (const std::exception& error) {
+        fprintf(stderr, "MediaSDK stitcher failed: %s\n", error.what());
+    }
+    rclcpp::shutdown();
+    return 0;
+}
