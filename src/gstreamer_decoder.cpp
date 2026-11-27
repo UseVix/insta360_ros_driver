@@ -23,7 +23,7 @@ public:
 
         declare_parameter("compressed_topic", default_topic);
         declare_parameter("uncompressed_topic", "/equirectangular/image/decoded");
-        declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vaapih264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
+        declare_parameter("pipeline", std::string("appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vah264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"));
         topic_ = get_parameter("compressed_topic").as_string();
         uncompressed_topic_ = get_parameter("uncompressed_topic").as_string();
         pipeline_description_ = get_parameter("pipeline").as_string();

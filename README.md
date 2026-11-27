@@ -287,7 +287,7 @@ Decodes compressed H.264 video streams using a configurable GStreamer pipeline a
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
-| `pipeline` | `string` | `"appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vaapih264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
+| `pipeline` | `string` | `"appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vah264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
 
 #### CLI Usage
 ```bash
