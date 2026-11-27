@@ -2,8 +2,6 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <cmath>
 #include <numeric>
-#include <thread>
-#include <chrono>
 
 Equirectangular2PerspectiveNode::Equirectangular2PerspectiveNode()
     : Node("equirectangular2perspective_node"),

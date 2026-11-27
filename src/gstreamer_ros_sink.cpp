@@ -2,8 +2,6 @@
 
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
-#include <stdexcept>
-#include <mutex>
 
 GstreamerRosSink::GstreamerRosSink(const rclcpp::Node::SharedPtr& node,
                                    const std::string& topic)

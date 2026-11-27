@@ -1,5 +1,3 @@
-#include <iostream>
-#include <thread>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -9,7 +7,6 @@
 #include <limits>
 #include <map>
 #include <mutex>
-#include <cstdio>
 
 #include <camera/camera.h>
 #include <camera/photography_settings.h>
@@ -17,13 +14,11 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/qos.hpp"
-#include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "insta360_ros_driver/msg/camera_preview_info.hpp"
 #include "insta360_ros_driver/msg/exposure_data.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 #include "insta360_ros_driver/srv/clock_sync.hpp"
-#include "h26x_stream_info.hpp"
 
 // Host monotonic time in milliseconds (microsecond resolution).
 static inline double steadyNowMs() {

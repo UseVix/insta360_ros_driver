@@ -23,7 +23,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 

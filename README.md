@@ -20,44 +20,35 @@ To use this driver, you need to first have Insta360 SDK. Please apply for the SD
 
 For additional instructions, see this [post](https://github.com/ai4ce/insta360_ros_driver/issues/10#issuecomment-3371481987).
 
-**Note: Please make sure you use the latest SDK.** This package is tested with CameraSDK 2.2.4 and MediaSDK 3.2.0 (Linux x86_64). Older SDKs (CameraSDK 2.1.x, MediaSDK 3.1.x) are not compatible with the current code.
+**Note: Please make sure you use the latest SDK.** This package is tested with CameraSDK 2.2.4 and MediaSDK 3.2.0 (Linux x86_64). Older SDKs might not be compatible.
 
 ```bash
 cd ~/ros2_ws/src
 git clone -b humble https://github.com/ai4ce/insta360_ros_driver
 cd ..
 ```
-The SDK is delivered as `.tar_<number>.gz` files, which are ordinary gzip tarballs (`tar -xzf` unpacks them). Use the `linux-x86_64` CameraSDK archive on a PC; the `aarch64` archives are for ARM boards such as Jetson. Install the CameraSDK headers and library into the package (these paths are git-ignored):
-```bash
-tar -xzf CameraSDK-2.2.4-<build>-linux-x86_64.tar_<number>.gz
-cd CameraSDK-2.2.4-<build>-linux-x86_64
-PKG=~/ros2_ws/src/insta360_ros_driver
-mkdir -p $PKG/include/camera $PKG/include/stream $PKG/lib
-cp include/camera/*.h $PKG/include/camera/
-cp include/stream/*.h $PKG/include/stream/
-cp lib/libCameraSDK.so $PKG/lib/
-```
+If you already have archive with Insta360 SDK
+1. Choose version of CameraSDK comaptible with your architecture
+2. add the <code>camera</code> and <code>stream</code> header files inside the <code>include</code> directory
+3. add the <code>libCameraSDK.so</code> library under the <code>lib</code> directory.
+
 
 ### MediaSDK Installation (Optional for Hardware Stitching)
 The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera's H.264/H.265 access units and IMU data and returns stitched frames. It is only needed for `media_sdk_stitcher`: without it the rest of the package still builds, and CMake prints `Insta360 MediaSDK not found: media_sdk_stitcher will not be built`.
 
-The MediaSDK archive contains a Debian package with the runtime (libraries, bundled CUDA runtime and AI models) and, separately, the headers. Install the package and copy the headers into the ROS package:
-```bash
-tar -xzf MediaSDK-3.2.0-<build>-linux64.tar_<number>.gz
-cd MediaSDK-3.2.0-<build>-linux64
-sudo apt install ./MediaSDK-3.2.0-linux-amd64.deb   # installs to /opt/MediaSDK-3.2.0-linux
-PKG=~/ros2_ws/src/insta360_ros_driver
-mkdir -p $PKG/include/media_sdk
-cp include/*.h $PKG/include/media_sdk/
-```
-CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x MediaSDK-3.2.0-linux-amd64.deb <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
+1. Copy the MediaSDK header files (the `include/*.h` files in the MediaSDK archive) into `include/media_sdk`.
+2. Install the MediaSDK runtime package.  On host, run:
+   ```
+   sudo apt install <MediaSDK .deb file>
+   ```
+   For the [Docker installation](#docker-installation), copy `.deb` file into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
+CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x <MediaSDK .deb file> <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
 ```bash
 colcon build --symlink-install --cmake-args \
-  -DINSTA360_MEDIA_SDK_ROOT=<dir>/opt/MediaSDK-3.2.0-linux
+  -DINSTA360_MEDIA_SDK_ROOT=<dir with lib/libMediaSDK.so>/opt/MediaSDK-<version>-linux
 ```
-For the [Docker installation](#docker-installation), copy `MediaSDK-3.2.0-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
+For the [Docker installation](#docker-installation), copy `MediaSDK-<version>-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. 
 
-The older MediaSDK 3.1.x (`libmediasdk-dev` package, `libMediaSDK-dev-3.1.1…deb`) is no longer used, and CMake does not search `/usr` for MediaSDK. If it is still installed, it can be removed with `sudo apt remove libmediasdk-dev`.
 
 ## Installation
 
