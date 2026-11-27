@@ -10,7 +10,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/image.hpp"
-#include "cv_bridge/cv_bridge.h"
+#include "cv_bridge/cv_bridge.hpp"
 #include "sensor_msgs/image_encodings.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
 
