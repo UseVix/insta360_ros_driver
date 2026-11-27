@@ -149,7 +149,7 @@ Every node in this package can be run individually from the command line using `
 
 
 ### 1. Camera Driver (`insta360_ros_driver`)
-Connects directly to the Insta360 camera hardware over USB, synchronizes system time to the camera, initializes live video streaming, and broadcasts compressed video packets alongside raw inertial motion measurements and camera telemetry.
+Connects directly to the Insta360 camera hardware over USB, synchronizes system time to the camera, initializes live video streaming, and broadcasts compressed video packets alongside raw inertial motion measurements and camera telemetry. The compressed stream is dual fisheye image.
 
 #### Published Topics
 | Topic Name (Default) | Parameter | Type | Description |
@@ -487,7 +487,7 @@ ros2 run insta360_ros_driver equirectangular2perspective_cpp --ros-args \
 ---
 
 ### 9. Webcam Equirectangular Node (`webcam_equirectangular`)
-Captures video frames from standard UVC webcam devices, verifies 2:1 aspect ratio, and outputs raw equirectangular video frames.
+Captures video frames from standard UVC webcam devices, verifies 2:1 aspect ratio, and outputs raw equirectangular video frames. The video is equirectangular image pre-stitched by camera
 
 #### Published Topics
 | Topic Name (Default) | Parameter | Type | Description |
@@ -586,12 +586,7 @@ All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` file
 | `decouple_flowstate` | `true` | Republishes the stitcher's `/equirectangular/flowstate_orientation` as `/camera_orientation/quaternion`, so the perspective nodes follow the orientation FlowState used and the view is decoupled from the stabilization rotation |
 | `display_flowstate_orientation` | `true` | Republishes `/equirectangular/flowstate_orientation` as a `geometry_msgs/msg/PoseStamped` on `/pose_out` and publishes a static identity `map` -> `camera_frame` TF, so the orientation can be viewed in RViz2 |
 
-> [!NOTE]
-> **Camera Driver Mode vs. Webcam Mode:**
-> - **Camera Driver Mode (Default, `webcam_equirectangular:=false`):**
->   Connects directly to the camera over USB using the Insta360 SDK (`insta360_ros_driver`), publishing raw dual-fisheye compressed stream packets and 6-DOF IMU telemetry. The `media_sdk_stitcher` stitches this stream into `/equirectangular/image`.
-> - **Webcam Mode (`webcam_equirectangular:=true`):**
->   Captures pre-stitched 2:1 equirectangular frames directly from the camera via standard V4L2/UVC (`webcam_equirectangular`). Setting `webcam_equirectangular:=true` automatically turns off `insta360_ros_driver` and `media_sdk_stitcher` (for the stitcher to activate, both `media_sdk_stitcher:=true` AND `webcam_equirectangular:=false` must be set). Downstream nodes like `gstreamer_encoder` continue to stream the stitched equirectangular output seamlessly.
+
 
 #### Bringup Examples:
 - **Default (Camera USB SDK + MediaSDK hardware stitching + ROS H.264 streaming):**
