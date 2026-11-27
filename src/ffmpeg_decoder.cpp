@@ -1,4 +1,3 @@
-#include <iostream>
 #include <thread>
 #include <string>
 #include <queue>
@@ -9,7 +8,6 @@
 #include <opencv2/opencv.hpp>
 
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "cv_bridge/cv_bridge.h"
@@ -18,9 +16,7 @@
 
 extern "C" {
     #include <libavcodec/avcodec.h>
-    #include <libavformat/avformat.h>
     #include <libswscale/swscale.h>
-    #include <libavutil/imgutils.h>
 }
 
 static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {

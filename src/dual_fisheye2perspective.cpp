@@ -2,8 +2,6 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <cmath>
 #include <numeric>
-#include <thread>
-#include <chrono>
 
 DualFisheye2PerspectiveNode::DualFisheye2PerspectiveNode()
     : Node("dual_fisheye2perspective_node"),

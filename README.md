@@ -43,21 +43,20 @@ The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera'
 
 The MediaSDK archive contains a Debian package with the runtime (libraries, bundled CUDA runtime and AI models) and, separately, the headers. Install the package and copy the headers into the ROS package:
 ```bash
-tar -xzf MediaSDK-3.2.0-<build>-linux64.tar_<number>.gz
-cd MediaSDK-3.2.0-<build>-linux64
-sudo apt install ./MediaSDK-3.2.0-linux-amd64.deb   # installs to /opt/MediaSDK-3.2.0-linux
-PKG=~/ros2_ws/src/insta360_ros_driver
+PKG=<path to this package>
+tar -xzf MediaSDK-<version>-<build>-linux64.tar_<number>.gz
+cd MediaSDK-<version>-<build>-linux64
+sudo apt install ./MediaSDK-<version>-linux-amd64.deb   # installs to /opt/MediaSDK-<version>-linux
 mkdir -p $PKG/include/media_sdk
 cp include/*.h $PKG/include/media_sdk/
 ```
-CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x MediaSDK-3.2.0-linux-amd64.deb <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
+CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x MediaSDK-<version>-linux-amd64.deb <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
 ```bash
 colcon build --symlink-install --cmake-args \
-  -DINSTA360_MEDIA_SDK_ROOT=<dir>/opt/MediaSDK-3.2.0-linux
+  -DINSTA360_MEDIA_SDK_ROOT=<dir>/opt/MediaSDK-<version>-linux
 ```
-For the [Docker installation](#docker-installation), copy `MediaSDK-3.2.0-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
+For the [Docker installation](#docker-installation), copy `MediaSDK-<version>-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
 
-The older MediaSDK 3.1.x (`libmediasdk-dev` package, `libMediaSDK-dev-3.1.1…deb`) is no longer used, and CMake does not search `/usr` for MediaSDK. If it is still installed, it can be removed with `sudo apt remove libmediasdk-dev`.
 
 ## Installation
 

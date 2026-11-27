@@ -1,8 +1,6 @@
 #include "dual_fisheye2equirectangular.hpp"
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <cmath>
-#include <thread>
-#include <chrono>
 
 DualFisheye2EquirectangularNode::DualFisheye2EquirectangularNode()
     : Node("dual_fisheye2equirectangular_node"),

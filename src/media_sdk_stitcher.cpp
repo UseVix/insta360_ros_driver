@@ -2,7 +2,6 @@
 #include <ins_stitcher.h>
 
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include "insta360_ros_driver/msg/camera_preview_info.hpp"
@@ -13,7 +12,6 @@
 
 #include "stabilization_patch.hpp"
 
-#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <memory>
