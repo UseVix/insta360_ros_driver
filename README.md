@@ -166,55 +166,6 @@ ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
   --params-file config/insta360_ros_driver.yaml -p measure_latency:=true
 ```
 
-#### Stream Format Check
-The driver checks whether the incoming stream matches the requested `video_resolution` and `video_bitrate`. It is on by default (`check_stream_format`).
-- **Resolution:** read from the SPS inside the H.264/H.265 bitstream, logged once when streaming starts and again if it changes. A mismatch is logged as a warning.
-- **Frame rate:** measured from the camera timestamps of consecutive frames.
-- **Bitrate:** measured from the bytes received per second of camera time.
-
-With `measure_latency:=true`, a `[stream]` line with all three is logged each report period:
-```
-[stream] stream 0 | resolution=1920x960 requested=1920x960 MATCH | fps=29.98 requested=30.00 MATCH | bitrate=530123 requested=524288 ratio=1.01 MATCH | sps_fps=30.00 frames=150 keyframes=5 max_packet_bytes=45123
-```
-
-| Parameter | Default | Description |
-| :--- | :--- | :--- |
-| `check_stream_format` | `true` | Enable the check |
-| `stream_check_fps_tolerance` | `0.10` | fps is `MATCH` within this fraction of the request |
-| `stream_check_bitrate_tolerance` | `0.50` | bitrate is `MATCH` within this fraction, otherwise `BELOW`/`ABOVE` |
-
-Encoders produce less than the requested bitrate on easy-to-compress scenes, so `BELOW` alone does not mean the setting is ignored. `ABOVE` does. The reliable test is comparing runs with different requested bitrates, which the sweep below does.
-
-#### Latency Sweep
-`latency_sweep.py` finds out which camera settings affect latency, then measures every combination of the ones that do. The settings it tests (the first value of each list is the baseline):
-
-| Setting | Option | Default values |
-| :--- | :--- | :--- |
-| Exposure | `--exposures` | `auto shutter:30 shutter:60 shutter:100 shutter:120 shutter:240 shutter:500 shutter:1000` |
-| Video sub-mode | `--sub-modes` | `normal hdr pure liveview` |
-| Codec | `--codecs` | `h264 h265` (`current` = keep the camera's codec, no prompts) |
-| Contrast / saturation | `--contrast` / `--saturation` | `64 0 256` |
-| Brightness | `--brightness` | `0 -256 256` |
-| Sharpness | `--sharpness` | `3 0 6` |
-| White balance | `--white-balance` | `auto 2700k 7500k` |
-| Resolution / bitrate | `--resolutions` / `--bitrates` | `1920x960p30` / `524288` (one value each, so not tested) |
-
-1. **Screening** (24 runs, ~17 min with the defaults). Each setting is changed on its own while everything else stays at baseline. The baseline runs 3 times, spread over the phase, to measure run-to-run variation. A setting has an effect if it moves mean latency by more than the larger of 10 ms (`--min-effect-ms`) or 3× the baseline's variation (`--noise-factor`), or changes the frame rate by more than 10 % (`--fps-effect`). Values the camera refuses (it won't start, or it rejects the setting) are left out.
-2. **Full sweep:** every combination of the settings that had an effect. All other settings stay at baseline, and runs already done in screening are reused. If the full sweep would need more than `--max-full-runs` runs (default 300), it doesn't start; narrow the value lists or raise the limit.
-
-The codec can't be switched through the SDK. When a run needs the other codec, the script asks you to change it on the camera's menu and press Enter (`s` skips that codec, `q` stops), then checks the driver log to confirm the switch. Runs are grouped so you switch as few times as possible. Codecs are tested in the order of `--codecs`: H.264 first (the baseline), then H.265. If the camera is on H.265 when the sweep starts, you are asked to switch to H.264 before the first run. Without a terminal (e.g. stdin closed), that codec is marked unavailable.
-
-When the sweep finishes, the camera is put back to the baseline sub-mode and image settings (`--no-restore` to skip).
-
-```bash
-ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --dry-run          # plan and time estimate
-ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep                    # screening + full sweep
-ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --phase screen     # screening only
-ros2 run insta360_ros_driver latency_sweep.py --out ~/sweep --summary-only     # print the report again
-```
-
-Outputs: `<out>.csv` (one row per run, with the phase, every setting, latency and the received stream format), `<out>_windows.csv` (one row per report window), `<out>_report.txt` (screening verdicts, lowest-latency configurations, stream format check) and `<out>_logs/`. Re-running the same command resumes; runs that did not finish cleanly are retried. Ctrl+C once stops after the current run, twice stops immediately.
-
 ---
 
 ### 2. FFmpeg Video Decoder (`ffmpeg_decoder`)
@@ -268,7 +219,7 @@ Decodes compressed H.264 video streams using a configurable GStreamer pipeline a
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `use_custom_stream_msg` | `bool` | `false` | When `true`, subscribes to `CameraCompressedStreamData`; when `false`, subscribes to standard `CompressedImage` |
-| `pipeline` | `string` | `"appsrc name=source is-live=true format=time ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
+| `pipeline` | `string` | `"appsrc name=source is-live=true format=time caps=video/x-h264,stream-format=byte-stream ! h264parse ! vaapih264dec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false"` | GStreamer pipeline string for video decoding |
 
 #### CLI Usage
 ```bash
@@ -301,8 +252,8 @@ Encodes raw uncompressed video frames into H.264 video using GStreamer and trans
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `transport` | `string` | `"ros"` | Transmission protocol (`"ros"` or `"udp"`) |
-| `pipeline` | `string` | `"appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=4000 ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"` | GStreamer pipeline used when `transport` is `"udp"` |
-| `ros_pipeline` | `string` | `"appsrc name=ros_source is-live=true ! videoconvert ! x264enc tune=zerolatency ! h264parse ! appsink name=ros_sink sync=false"` | GStreamer pipeline used when `transport` is `"ros"` |
+| `pipeline` | `string` | `"appsrc ! videoconvert ! nvh264enc ! rtph264pay pt=96 ! udpsink host=192.168.1.50 port=5000"` | GStreamer pipeline used when `transport` is `"udp"` |
+| `ros_pipeline` | `string` | `"appsrc name=ros_source is-live=true ! videoconvert ! nvh264enc gop-size=30 ! video/x-h264,stream-format=byte-stream ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream ! appsink name=ros_sink sync=false"` | GStreamer pipeline used when `transport` is `"ros"` |
 | `fps` | `double` | `30.0` | Target encoding frame rate |
 
 #### CLI Usage
