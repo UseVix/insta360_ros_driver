@@ -143,7 +143,7 @@ private:
         bool disable_stabilization = get_parameter("disable_stabilization").as_bool();
         if (disable_stabilization ) {
             std::string error;
-            installed = insta360_ros_driver::install_patch(error)
+            const bool installed = insta360_ros_driver::install_patch(error);
             if (installed) {
                 stabilization_disabled_ = true;
                 RCLCPP_INFO(get_logger(),

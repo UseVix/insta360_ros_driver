@@ -30,6 +30,21 @@
 namespace insta360_ros_driver {
 
 
+  // Same ABI as the originals: `this` in rdi, glm::quat (4 floats x,y,z,w) returned in xmm0/xmm1.
+  struct Quat { float x, y, z, w; };
+  static Quat identity_quat(void*) {return {0.f, 0.f, 0.f, 1.f}; }
+  static bool write_slot(void** slot, void* fn, std::string& error) {
+    const long page = sysconf(_SC_PAGESIZE);
+    auto* start = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(slot) & ~static_cast<uintptr_t>(page - 1));
+    if (mprotect(start, page, PROT_READ | PROT_WRITE) != 0) {
+      error = "mprotect(RW) failed on the vtable page";
+      return false;
+    }
+    *slot = fn;
+    mprotect(start, page, PROT_READ);
+    return true;
+  }
+
   // Returns true if the patch is active (installed now or earlier); on failure `error` says why.
   static bool install_patch(std::string& error) {
     static constexpr const char* GetStablizationQuat = "_ZN9arvrender38DynamicStitchDoubleFisheyeStitchObject19GetStablizationQuatEv";
@@ -75,20 +90,6 @@ namespace insta360_ros_driver {
     return true;
   }
 
-  // Same ABI as the originals: `this` in rdi, glm::quat (4 floats x,y,z,w) returned in xmm0/xmm1.
-  struct Quat { float x, y, z, w; };
-  static Quat identity_quat(void*) {return {0.f, 0.f, 0.f, 1.f}; }
-  static bool write_slot(void** slot, void* fn, std::string& error) {
-    const long page = sysconf(_SC_PAGESIZE);
-    auto* start = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(slot) & ~static_cast<uintptr_t>(page - 1));
-    if (mprotect(start, page, PROT_READ | PROT_WRITE) != 0) {
-      error = "mprotect(RW) failed on the vtable page";
-      return false;
-    }
-    *slot = fn;
-    mprotect(start, page, PROT_READ);
-    return true;
-  }
 
 
 
