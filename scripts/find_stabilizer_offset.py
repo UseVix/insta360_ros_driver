@@ -8,6 +8,7 @@ inside the internal RealTimeStitcherImp class.
 """
 
 import argparse
+import glob
 import os
 import re
 import shutil
@@ -16,7 +17,9 @@ import sys
 
 
 def find_default_so():
-    candidates = [
+    # MediaSDK >= 3.2 is installed by its .deb into /opt/MediaSDK-<version>-linux (newest first).
+    opt_installs = sorted(glob.glob("/opt/MediaSDK-*-linux/lib/libMediaSDK.so"), reverse=True)
+    candidates = opt_installs + [
         "/camera_ws/build/insta360_ros_driver/media_sdk/usr/lib/libMediaSDK.so",
         "/camera_ws/install/insta360_ros_driver/lib/insta360_ros_driver/media_sdk/libMediaSDK.so",
         os.path.join(os.path.dirname(__file__), "..", "lib", "media_sdk", "libMediaSDK.so"),

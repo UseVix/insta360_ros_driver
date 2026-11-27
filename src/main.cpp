@@ -574,15 +574,17 @@ public:
         metadata->header.frame_id = "camera_frame";
         metadata->camera_name = preview.camera_name;
         metadata->decode_type = preview.encode_type == ins_camera::VideoEncodeType::H265 ? "h265" : "h264";
-        metadata->crop_src_width = preview.crop_info.src_width;
-        metadata->crop_src_height = preview.crop_info.src_height;
-        metadata->crop_dst_width = preview.crop_info.dst_width;
-        metadata->crop_dst_height = preview.crop_info.dst_height;
-        metadata->crop_offset_x = preview.crop_info.crop_offset_x;
-        metadata->crop_offset_y = preview.crop_info.crop_offset_y;
-        metadata->camera_offset = preview.offset;
         metadata->delay_timestamp = preview.delay_timestamp;
         metadata->sweep_time = preview.sweep_time;
+        metadata->crop_src_width = preview.GetCropSrcWidth();
+        metadata->crop_src_height = preview.GetCropSrcHeight();
+        metadata->crop_dst_width = preview.GetCropDstWidth();
+        metadata->crop_dst_height = preview.GetCropDstHeight();
+        metadata->crop_offset_x = preview.GetCropOffsetX();
+        metadata->crop_offset_y = preview.GetCropOffsetY();
+        for (size_t i = 0; i < preview.GetCalibrationCount(); ++i) {
+            metadata->camera_offset.push_back(preview.GetCalibration(i));
+        }
         metadata_pub_->publish(std::move(metadata));
         discovery.FreeDeviceDescriptors(list);
 
@@ -613,8 +615,8 @@ public:
         param.using_lrv = false;
         RCLCPP_INFO(node_->get_logger(), "Live stream: resolution=%s bitrate=%u bit/s | camera preview info: %dx%d (crop to %dx%d)",
                     resolution_name.c_str(), param.video_bitrate,
-                    static_cast<int>(preview.crop_info.src_width), static_cast<int>(preview.crop_info.src_height),
-                    static_cast<int>(preview.crop_info.dst_width), static_cast<int>(preview.crop_info.dst_height));
+                    static_cast<int>(preview.GetCropSrcWidth()), static_cast<int>(preview.GetCropSrcHeight()),
+                    static_cast<int>(preview.GetCropDstWidth()), static_cast<int>(preview.GetCropDstHeight()));
 
 
 

@@ -15,49 +15,113 @@ A ROS driver for the Insta360 cameras. This driver is tested on Ubuntu 22.04 wit
 
 Set the `video_resolution` parameter of the camera driver (see `config/insta360_ros_driver.yaml`) to change the resolution.
 
-## Installation
+## Driver Download
 To use this driver, you need to first have Insta360 SDK. Please apply for the SDK from the [Insta360 website](https://www.insta360.com/sdk/home). 
 
 For additional instructions, see this [post](https://github.com/ai4ce/insta360_ros_driver/issues/10#issuecomment-3371481987).
 
-**Note: Please make you use the latest SDK. This package works with the SDK posted after April 23, 2025**
+**Note: Please make sure you use the latest SDK.** This package is tested with CameraSDK 2.2.4 and MediaSDK 3.2.0 (Linux x86_64). Older SDKs (CameraSDK 2.1.x, MediaSDK 3.1.x) are not compatible with the current code.
 
 ```bash
 cd ~/ros2_ws/src
 git clone -b humble https://github.com/ai4ce/insta360_ros_driver
 cd ..
 ```
-Then, the Insta360 libraries need to be installed as follows:
-- add the `camera` and `stream` header files inside the `include` directory
-- add the `libCameraSDK.so` library under the `lib` directory.
-
-### GStreamer Dependencies
-For H.264 video encoding and decoding via GStreamer, install the required development and plugin packages:
+The SDK is delivered as `.tar_<number>.gz` files, which are ordinary gzip tarballs (`tar -xzf` unpacks them). Use the `linux-x86_64` CameraSDK archive on a PC; the `aarch64` archives are for ARM boards such as Jetson. Install the CameraSDK headers and library into the package (these paths are git-ignored):
 ```bash
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-  gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-vaapi
+tar -xzf CameraSDK-2.2.4-<build>-linux-x86_64.tar_<number>.gz
+cd CameraSDK-2.2.4-<build>-linux-x86_64
+PKG=~/ros2_ws/src/insta360_ros_driver
+mkdir -p $PKG/include/camera $PKG/include/stream $PKG/lib
+cp include/camera/*.h $PKG/include/camera/
+cp include/stream/*.h $PKG/include/stream/
+cp lib/libCameraSDK.so $PKG/lib/
 ```
 
 ### MediaSDK Installation (Optional for Hardware Stitching)
-The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera's H.264/H.265 access units and IMU data and returns stitched frames. Place the supplied Debian package at this exact path in the ROS package:
+The MediaSDK package contains `ins::RealTimeStitcher`, which accepts the camera's H.264/H.265 access units and IMU data and returns stitched frames. It is only needed for `media_sdk_stitcher`: without it the rest of the package still builds, and CMake prints `Insta360 MediaSDK not found: media_sdk_stitcher will not be built`.
+
+The MediaSDK archive contains a Debian package with the runtime (libraries, bundled CUDA runtime and AI models) and, separately, the headers. Install the package and copy the headers into the ROS package:
 ```bash
-lib/libMediaSDK-dev-3.1.1.0-20250922_191110-amd64.deb
+tar -xzf MediaSDK-3.2.0-<build>-linux64.tar_<number>.gz
+cd MediaSDK-3.2.0-<build>-linux64
+sudo apt install ./MediaSDK-3.2.0-linux-amd64.deb   # installs to /opt/MediaSDK-3.2.0-linux
+PKG=~/ros2_ws/src/insta360_ros_driver
+mkdir -p $PKG/include/media_sdk
+cp include/*.h $PKG/include/media_sdk/
 ```
-The CMake configuration extracts this package into the build directory automatically. To use an SDK installed elsewhere, set its prefix explicitly:
+CMake uses the newest `/opt/MediaSDK-*-linux` automatically. To use an SDK located elsewhere (for example unpacked without root using `dpkg-deb -x MediaSDK-3.2.0-linux-amd64.deb <dir>`), pass the directory that contains `lib/libMediaSDK.so`:
 ```bash
 colcon build --symlink-install --cmake-args \
-  -DINSTA360_MEDIA_SDK_ROOT=/path/to/MediaSDK/prefix
+  -DINSTA360_MEDIA_SDK_ROOT=<dir>/opt/MediaSDK-3.2.0-linux
 ```
+For the [Docker installation](#docker-installation), copy `MediaSDK-3.2.0-linux-amd64.deb` into the package's `lib` directory instead of installing it on the host; the image installs it during the build. The headers still go in `include/media_sdk`.
 
-### Building the Workspace
-Afterwards, install the other required dependencies and build:
+The older MediaSDK 3.1.x (`libmediasdk-dev` package, `libMediaSDK-dev-3.1.1…deb`) is no longer used, and CMake does not search `/usr` for MediaSDK. If it is still installed, it can be removed with `sudo apt remove libmediasdk-dev`.
+
+## Installation
+
+You can proceed either with manual install or docker install.
+### Manual Installation
+Install the dependencies (including GStreamer and FFmpeg) and build:
 ```bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
+Skip to the [usage](#usage) section below to proceed.
+
+### Docker Installation
+
+A docker container is available for development and it sets up the Zenoh RMW for best performance. Run the following: 
+
+```
+xhost +local:root
+cd docker
+docker compose down && docker compose up --build
+```
+
+Once you see the following message: 
+
+```
+insta360_ros_driver  | #All required rosdeps installed successfully
+insta360_ros_driver  | Starting >>> insta360_ros_driver
+insta360_ros_driver  | Finished <<< insta360_ros_driver [0.23s]
+insta360_ros_driver  | 
+insta360_ros_driver  | Summary: 1 package finished [0.35s]
+insta360_ros_driver  | ================================
+insta360_ros_driver  |  Insta360 Docker Container Ready
+insta360_ros_driver  |  Run 'docker exec -it insta360_ros_driver bash'
+insta360_ros_driver  | ================================
+``` 
+
+in the build log, you can detach with 'd' and enter the container via:
+
+```
+docker exec -it insta360_ros_driver bash
+ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
+Then in another terminal, run:
+```
+docker exec -it insta360_ros_driver bash
+ros2 launch insta360_ros_driver bringup.launch.xml
+```
+
+This will start the camera. You can use rqt in a third terminal to view the image
+
+```
+docker exec -it insta360_ros_driver bash
+ros2 run rqt_image_view rqt_image_view
+```
+
+If you know how to use [tmux](https://github.com/tmux/tmux/wiki), the container also installs it and makes it easier to create multiple windows.
+
+The topics can also be accessed from host if you install Zenoh RMW on host. Tutorials are available [here](https://docs.ros.org/en/humble/Installation/RMW-Implementations/Non-DDS-Implementations/Working-with-Zenoh.html). In general Zenoh is very good for high bandwidth data and is the recommendation for this.
+
+
+
+
 
 ### Camera Setup
 Before continuing, **make sure the camera is set to dual-lens mode**.
@@ -73,7 +137,9 @@ The Insta360 requires sudo privilege to be accessed via USB. To compensate for t
 cd ~/ros2_ws/src/insta360_ros_driver
 ./setup.sh
 ```
-This creates a symlink based on the vendor ID of Insta360 cameras. The symlink, in this case `/dev/insta` is used to grant permissions to the usb port used by the camera.
+
+This creates a symlink based on the vendor ID of Insta360 cameras. The symlink, in this case <code>/dev/insta</code> is used to grant permissions to the usb port used by the camera.
+
 
 ![setup](docs/setup.png)
 
@@ -84,9 +150,11 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 sudo chmod 777 /dev/insta
 ```
+The Insta360 X3 (and potentially other models) needs a micro-sd card inserted to use the API. Ensure this is done.
 
 ## Nodes & CLI Usage
 Every node in this package can be run individually from the command line using `ros2 run`. All nodes accept configuration files via `--params-file` from the `config/` directory or direct parameter overrides.
+
 
 ### 1. Camera Driver (`insta360_ros_driver`)
 Connects directly to the Insta360 camera hardware over USB, synchronizes system time to the camera, initializes live video streaming, and broadcasts compressed video packets alongside raw inertial motion measurements and camera telemetry.
@@ -273,13 +341,7 @@ ros2 run insta360_ros_driver gstreamer_encoder --ros-args \
 ```bash
 source scripts/gst_timing.sh   # on if off, off if on
 ```
-Times are in nanoseconds. To get the mean time per element, save a node's output (e.g. `... 2> gst.log`) and run:
-```bash
-grep "element-latency, element-id" gst.log | grep -v format \
-  | sed -E 's/.*element=\(string\)([^,]+),.*time=\(guint64\)([0-9]+).*/\1 \2/' \
-  | awk '{n[$1]++; t[$1]+=$2} END {for (e in n) printf "%-24s %6d buffers  %8.3f ms\n", e, n[e], t[e]/n[e]/1e6}'
-```
-Nodes that are already running are not affected until they are restarted.
+Times are in nanoseconds.
 
 ---
 
@@ -327,7 +389,7 @@ To detect the offset:
 # Or via ROS 2:
 ros2 run insta360_ros_driver find_stabilizer_offset.py
 ```
-If the detected offset changes from default `0x260` (e.g. `0x270`), update the hex value in `src/media_sdk_stitcher.cpp` and rebuild.
+The code uses `0x298`, the offset in MediaSDK 3.2.0 (it was `0x260` in 3.1.1). If the detected offset differs, update the hex value in `src/media_sdk_stitcher.cpp` and rebuild.
 
 ---
 
@@ -360,9 +422,11 @@ Stitches uncompressed dual-fisheye images into 360° equirectangular panoramas u
 ```bash
 ros2 run insta360_ros_driver dual_fisheye2equirectangular_cpp --ros-args \
   --params-file config/dual_fisheye2equirectangular.yaml
+
 ```
 
 ---
+
 
 ### 7. Dual-Fisheye to Perspective View (`dual_fisheye2perspective_cpp`)
 Generates a virtual rectilinear perspective camera viewport directly from uncompressed dual-fisheye images with configurable field of view and real-time viewing orientation control.
@@ -488,6 +552,7 @@ dual_fisheye2equirectangular_node:
     out_width: 1920
     out_height: 960
 ```
+
 
 ---
 

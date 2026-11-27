@@ -1,10 +1,10 @@
 #include <ins_realtime_stitcher.h>
+#include <ins_stitcher.h>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <cv_bridge/cv_bridge.h>
 #include "insta360_ros_driver/msg/camera_preview_info.hpp"
 #include "insta360_ros_driver/msg/exposure_data.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
@@ -59,6 +59,7 @@ public:
         declare_parameter("disable_stabilization", true);
 
         ins::InitEnv();
+        ins::SetModelFileRootDir(MEDIA_SDK_MODEL_DIR);
         ins::SetLogLevel(ins::InsLogLevel::WARNING);
         stitcher_ = std::make_shared<ins::RealTimeStitcher>();
 
@@ -115,15 +116,11 @@ private:
         const auto decode_type = preview.decode_type;
         camera_info.decode_type = decode_type == "h265"
             ? ins::VideoDecodeType::kH265 : ins::VideoDecodeType::kH264;
-        camera_info.offset = preview.camera_offset;
-        camera_info.window_crop_info_.src_width = preview.crop_src_width;
-        camera_info.window_crop_info_.src_height = preview.crop_src_height;
-        camera_info.window_crop_info_.dst_width = preview.crop_dst_width;
-        camera_info.window_crop_info_.dst_height = preview.crop_dst_height;
-        camera_info.window_crop_info_.crop_offset_x = preview.crop_offset_x;
-        camera_info.window_crop_info_.crop_offset_y = preview.crop_offset_y;
-        camera_info.gyro_timestamp = preview.delay_timestamp;
-        camera_info.sweep_timestamp = preview.sweep_time;
+        camera_info.SetCalibration(
+            preview.camera_offset,
+            preview.crop_src_width, preview.crop_src_height,
+            preview.crop_dst_width, preview.crop_dst_height,
+            preview.crop_offset_x, preview.crop_offset_y);
         stitcher_->SetCameraInfo(camera_info);
 
         const auto stitch_type = get_parameter("stitch_type").as_string();
@@ -190,9 +187,14 @@ private:
                                  "Expected h264/h265 input, got '%s'", msg->data.format.c_str());
             return;
         }
+        // MediaSDK silently drops packets unless the stream type is one of the camera's
+        // own values: 0x20 is a single stream carrying both lenses, which is what the
+        // driver publishes (0x21/0x22 are the two halves of a dual-stream camera).
+        // TODO check if the units are right. There is inconsistency between comments in headers and what reverse engineering of sdk makes you think.
         stitcher_->HandleVideoData(
             msg->data.data.data(), msg->data.data.size(), stamp_to_ms(msg->data.header.stamp),
             msg->stream_type, msg->stream_index);
+
     }
 
     void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -231,15 +233,20 @@ private:
             return;
         }
         std::lock_guard<std::mutex> lock(publish_mutex_);
-        const auto encoding = format == 0 ? "rgba8" : "bgra8";
-        cv::Mat image(height, width, CV_8UC4, data[0], linesize[0]);
-        cv_bridge::CvImage output;
-        output.header.stamp.sec = static_cast<int32_t>(timestamp / 1000);
-        output.header.stamp.nanosec = static_cast<uint32_t>((timestamp % 1000) * 1000000);
+        
+        sensor_msgs::msg::Image output;
+        output.header.stamp.sec = static_cast<int32_t>(timestamp / 1000000);
+        output.header.stamp.nanosec = static_cast<uint32_t>((timestamp % 1000000) * 1000);
         output.header.frame_id = "camera_frame";
-        output.encoding = encoding;
-        output.image = image.clone();
-        output_pub_->publish(*output.toImageMsg());
+        output.height = height;
+        output.width = width;
+        output.encoding = format == 0 ? "rgba8" : "bgra8";
+        output.step = width * 4;
+        output.data.resize(output.step * height);
+        for (int row = 0; row < height; ++row) {
+            std::memcpy(&output.data[row * output.step], data[0] + row * linesize[0], output.step);
+        }
+        output_pub_->publish(output);
 
         // Extract internal FlowState stabilization quaternion if available
         if (stitcher_) {
@@ -247,7 +254,7 @@ private:
             void* imp = *reinterpret_cast<void**>(stitcher_raw);
             if (imp) {
                 auto* stabilizer = *reinterpret_cast<arvrender::SequenceStabilizer**>(
-                    reinterpret_cast<char*>(imp) + 0x260);
+                    reinterpret_cast<char*>(imp) + 0x298);  // MediaSDK 3.2.0 (0x260 in 3.1.1)
                 if (stabilizer) {
                     try {
                         auto q = stabilizer->GetStabilizerQuaternion(static_cast<double>(timestamp));
@@ -265,6 +272,7 @@ private:
                 }
             }
         }
+
     }
 
     std::shared_ptr<ins::RealTimeStitcher> stitcher_;

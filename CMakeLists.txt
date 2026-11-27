@@ -23,69 +23,34 @@ find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
-set(INSTA360_MEDIA_SDK_ROOT "" CACHE PATH "Insta360 MediaSDK installation prefix (overrides the bundled Debian package)")
-set(INSTA360_MEDIA_SDK_DEB
-  "${PROJECT_SOURCE_DIR}/lib/libMediaSDK-dev-3.1.1.0-20250922_191110-amd64.deb"
-  CACHE FILEPATH "Insta360 MediaSDK Debian package")
-
-if(INSTA360_MEDIA_SDK_ROOT STREQUAL "/usr" AND EXISTS "${INSTA360_MEDIA_SDK_DEB}")
-  unset(INSTA360_MEDIA_SDK_ROOT CACHE)
-  set(INSTA360_MEDIA_SDK_ROOT "")
+# Optional Insta360 MediaSDK (realtime stitcher, media_sdk_stitcher).
+# MediaSDK >= 3.2 is installed with `sudo apt install ./MediaSDK-<version>-linux-amd64.deb`
+# into /opt/MediaSDK-<version>-linux. That runtime already carries an $ORIGIN RPATH and its own
+# CUDA runtime, so nothing is extracted or patched here. Its headers ship separately in the SDK
+# archive (include/) and go in include/media_sdk. Without both, media_sdk_stitcher is skipped.
+set(INSTA360_MEDIA_SDK_ROOT "" CACHE PATH
+  "Insta360 MediaSDK prefix containing lib/libMediaSDK.so (default: newest /opt/MediaSDK-*-linux)")
+file(GLOB MEDIA_SDK_ROOTS LIST_DIRECTORIES true "/opt/MediaSDK-*-linux")
+if(MEDIA_SDK_ROOTS)
+  list(SORT MEDIA_SDK_ROOTS COMPARE NATURAL ORDER DESCENDING)
 endif()
-
-if(INSTA360_MEDIA_SDK_ROOT)
-  set(MEDIA_SDK_ROOT "${INSTA360_MEDIA_SDK_ROOT}")
-else()
-  if(NOT EXISTS "${INSTA360_MEDIA_SDK_DEB}")
-    message(FATAL_ERROR
-      "MediaSDK package not found at ${INSTA360_MEDIA_SDK_DEB}. "
-      "Place libMediaSDK-dev-3.1.1.0-20250922_191110-amd64.deb in the package lib directory, "
-      "or set INSTA360_MEDIA_SDK_ROOT to an installed SDK prefix.")
-  endif()
-
-  find_program(DPKG_DEB_EXECUTABLE dpkg-deb REQUIRED)
-  set(MEDIA_SDK_EXTRACT_DIR "${CMAKE_CURRENT_BINARY_DIR}/media_sdk")
-  execute_process(
-    COMMAND "${DPKG_DEB_EXECUTABLE}" -x "${INSTA360_MEDIA_SDK_DEB}" "${MEDIA_SDK_EXTRACT_DIR}"
-    RESULT_VARIABLE MEDIA_SDK_EXTRACT_RESULT
-    OUTPUT_VARIABLE MEDIA_SDK_EXTRACT_OUTPUT
-    ERROR_VARIABLE MEDIA_SDK_EXTRACT_ERROR
-  )
-  if(NOT MEDIA_SDK_EXTRACT_RESULT EQUAL 0)
-    message(FATAL_ERROR
-      "Failed to extract MediaSDK package ${INSTA360_MEDIA_SDK_DEB}:\n${MEDIA_SDK_EXTRACT_ERROR}")
-  endif()
-
-  # Remove bundled libcuda / libcudart so the host system NVIDIA driver and CUDA are used
-  file(GLOB BUNDLED_CUDA_CONFLICTS
-    "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/libcuda.so*"
-    "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/libcudart.so*"
-  )
-  if(BUNDLED_CUDA_CONFLICTS)
-    file(REMOVE ${BUNDLED_CUDA_CONFLICTS})
-  endif()
-
-  # Set $ORIGIN RPATH on extracted MediaSDK libraries so transitive dependencies resolve
-  find_program(PATCHELF_EXECUTABLE patchelf REQUIRED)
-  file(GLOB MEDIA_SDK_SHARED_LIBS "${MEDIA_SDK_EXTRACT_DIR}/usr/lib/*.so*")
-  foreach(media_sdk_lib ${MEDIA_SDK_SHARED_LIBS})
-    execute_process(
-      COMMAND "${PATCHELF_EXECUTABLE}" --set-rpath "$ORIGIN" "${media_sdk_lib}"
-      RESULT_VARIABLE PATCHELF_RESULT
-    )
-    if(NOT PATCHELF_RESULT EQUAL 0)
-      message(WARNING "Failed to set RPATH on ${media_sdk_lib}")
-    endif()
-  endforeach()
-
-  set(MEDIA_SDK_ROOT "${MEDIA_SDK_EXTRACT_DIR}/usr")
-  set(MEDIA_SDK_FROM_BUNDLED_PACKAGE TRUE)
-endif()
-
+# NO_DEFAULT_PATH: never fall back to /usr, where the legacy libmediasdk-dev 3.1.x package puts
+# headers and a libMediaSDK.so that are incompatible with the 3.2 API used by the stitcher.
 find_path(MEDIA_SDK_INCLUDE_DIR ins_realtime_stitcher.h
-  PATHS "${MEDIA_SDK_ROOT}/include" /usr/include REQUIRED)
+  HINTS "${PROJECT_SOURCE_DIR}/include/media_sdk" "${INSTA360_MEDIA_SDK_ROOT}/include"
+  NO_DEFAULT_PATH)
 find_library(MEDIA_SDK_LIBRARY MediaSDK
-  PATHS "${MEDIA_SDK_ROOT}/lib" /usr/lib /usr/lib/x86_64-linux-gnu REQUIRED)
+  HINTS ${INSTA360_MEDIA_SDK_ROOT} ${MEDIA_SDK_ROOTS} PATH_SUFFIXES lib
+  NO_DEFAULT_PATH)
+if(MEDIA_SDK_INCLUDE_DIR)
+  # The stitcher uses CameraInfo::SetCalibration(), introduced with the 3.2 headers.
+  file(STRINGS "${MEDIA_SDK_INCLUDE_DIR}/ins_common.h" MEDIA_SDK_HAS_SET_CALIBRATION REGEX "SetCalibration")
+  if(NOT MEDIA_SDK_HAS_SET_CALIBRATION)
+    message(WARNING "MediaSDK headers in ${MEDIA_SDK_INCLUDE_DIR} predate MediaSDK 3.2 "
+      "(no CameraInfo::SetCalibration); media_sdk_stitcher will not be built")
+    set(MEDIA_SDK_INCLUDE_DIR "")
+  endif()
+endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraPreviewInfo.msg"
@@ -122,6 +87,7 @@ link_directories(
 install(
   DIRECTORY config launch lib
   DESTINATION share/${PROJECT_NAME}
+  PATTERN "*.deb" EXCLUDE
 )
 
 install(
@@ -145,6 +111,11 @@ target_link_libraries(${PROJECT_NAME}_node CameraSDK  ${OpenCV_LIBRARIES} ${AVCO
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(${PROJECT_NAME}_node "${cpp_typesupport_target}")
 
+# libCameraSDK.so is installed to share/${PROJECT_NAME}/lib (install(DIRECTORY ... lib) above);
+# without this a non-symlink install cannot find it at runtime.
+set(CAMERA_SDK_INSTALL_RPATH "$ORIGIN/../../share/${PROJECT_NAME}/lib")
+set_target_properties(${PROJECT_NAME}_node PROPERTIES INSTALL_RPATH "${CAMERA_SDK_INSTALL_RPATH}")
+
 install(TARGETS ${PROJECT_NAME}_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -163,6 +134,7 @@ ament_target_dependencies(ffmpeg_decoder
 )
 target_link_libraries(ffmpeg_decoder CameraSDK  ${OpenCV_LIBRARIES} ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWSCALE_LIBRARIES})
 target_link_libraries(ffmpeg_decoder "${cpp_typesupport_target}")
+set_target_properties(ffmpeg_decoder PROPERTIES INSTALL_RPATH "${CAMERA_SDK_INSTALL_RPATH}")
 
 install(TARGETS ffmpeg_decoder
   DESTINATION lib/${PROJECT_NAME}
@@ -177,21 +149,25 @@ ament_target_dependencies(gstreamer_decoder rclcpp cv_bridge sensor_msgs std_msg
 target_link_libraries(gstreamer_decoder ${GSTREAMER_LIBRARIES})
 target_link_libraries(gstreamer_decoder "${cpp_typesupport_target}")
 
-add_executable(media_sdk_stitcher src/media_sdk_stitcher.cpp)
-ament_target_dependencies(media_sdk_stitcher rclcpp sensor_msgs cv_bridge rosidl_default_runtime)
-target_include_directories(media_sdk_stitcher PRIVATE ${MEDIA_SDK_INCLUDE_DIR})
-target_link_libraries(media_sdk_stitcher ${MEDIA_SDK_LIBRARY} pthread ${CMAKE_DL_LIBS})
-if(MEDIA_SDK_FROM_BUNDLED_PACKAGE)
-  set_target_properties(media_sdk_stitcher PROPERTIES INSTALL_RPATH "$ORIGIN/media_sdk")
-  install(
-    DIRECTORY "${MEDIA_SDK_ROOT}/lib/"
-    DESTINATION lib/${PROJECT_NAME}/media_sdk
-    FILES_MATCHING PATTERN "*.so*"
-    PATTERN "libcuda.so*" EXCLUDE
-    PATTERN "libcudart.so*" EXCLUDE
-  )
+if(MEDIA_SDK_INCLUDE_DIR AND MEDIA_SDK_LIBRARY)
+  get_filename_component(MEDIA_SDK_LIB_DIR "${MEDIA_SDK_LIBRARY}" DIRECTORY)
+  message(STATUS "Insta360 MediaSDK: ${MEDIA_SDK_LIBRARY} (headers: ${MEDIA_SDK_INCLUDE_DIR})")
+  add_executable(media_sdk_stitcher src/media_sdk_stitcher.cpp)
+  ament_target_dependencies(media_sdk_stitcher
+    rclcpp sensor_msgs geometry_msgs cv_bridge rosidl_default_runtime)
+  target_include_directories(media_sdk_stitcher PRIVATE ${MEDIA_SDK_INCLUDE_DIR})
+  target_compile_definitions(media_sdk_stitcher PRIVATE
+    MEDIA_SDK_MODEL_DIR="${MEDIA_SDK_LIB_DIR}/../bin/models/")
+  # CMAKE_DL_LIBS: dlsym/dladdr1 in src/stabilization_patch.hpp
+  target_link_libraries(media_sdk_stitcher
+    ${MEDIA_SDK_LIBRARY} pthread ${CMAKE_DL_LIBS} "${cpp_typesupport_target}")
+  # libMediaSDK.so resolves its bundled dependencies through its own $ORIGIN RPATH.
+  set_target_properties(media_sdk_stitcher PROPERTIES INSTALL_RPATH "${MEDIA_SDK_LIB_DIR}")
+  install(TARGETS media_sdk_stitcher DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS "Insta360 MediaSDK not found: media_sdk_stitcher will not be built "
+    "(install the MediaSDK .deb and copy its headers to include/media_sdk, see README)")
 endif()
-target_link_libraries(media_sdk_stitcher "${cpp_typesupport_target}")
 
 add_executable(webcam_equirectangular src/webcam_equirectangular.cpp)
 ament_target_dependencies(webcam_equirectangular rclcpp sensor_msgs cv_bridge OpenCV)
@@ -239,7 +215,6 @@ install(TARGETS
   equirectangular2perspective_cpp
   gstreamer_encoder
   gstreamer_decoder
-  media_sdk_stitcher
   webcam_equirectangular
   DESTINATION lib/${PROJECT_NAME}
 )

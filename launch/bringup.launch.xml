@@ -9,7 +9,6 @@
     <arg name="udp" default="false" description="Transmission mode: false for ROS topic, true for direct RTP/UDP"/>
     <arg name="dual_fisheye2perspective" default="false" description="Perspective view from dual-fisheye frames"/>
     <arg name="equirectangular2perspective" default="true" description="Perspective view from equirectangular frames"/>
-    <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
     <arg name="decouple_flowstate" default="true" description="decouples orientation corrections introduced by stitching with flowstate"/>
     <arg name="display_flowstate_orientation" default="true" description="display orientation useb by flowstate and used for decoupling"/>
     <arg name="imu_filter" default="true" description="Madgwick IMU orientation filter"/>
