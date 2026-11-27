@@ -1,0 +1,8 @@
+# Estimates the offset between the node's ROS clock (get_clock()->now()) and the camera's media clock.
+# The camera is queried clock_sync_samples times; the query with the smallest round trip is used.
+---
+bool success          # false if the camera returned no valid media time
+string message
+float64 rtt_ms        # round trip of the selected GetCameraMediaTime() query (ms)
+int64 camera_time_ms  # camera media time returned by the selected query (ms)
+float64 offset_ms     # ROS clock at the midpoint of the selected query minus camera_time_ms (ms)

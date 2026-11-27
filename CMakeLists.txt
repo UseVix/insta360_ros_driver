@@ -91,6 +91,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraPreviewInfo.msg"
   "msg/ExposureData.msg"
   "msg/CameraCompressedStreamData.msg"
+  "srv/ClockSync.srv"
   DEPENDENCIES std_msgs sensor_msgs
 )
 pkg_check_modules(AVCODEC REQUIRED libavcodec)

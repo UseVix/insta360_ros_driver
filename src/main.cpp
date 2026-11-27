@@ -22,6 +22,7 @@
 #include "insta360_ros_driver/msg/camera_preview_info.hpp"
 #include "insta360_ros_driver/msg/exposure_data.hpp"
 #include "insta360_ros_driver/msg/camera_compressed_stream_data.hpp"
+#include "insta360_ros_driver/srv/clock_sync.hpp"
 #include "h26x_stream_info.hpp"
 
 // Host monotonic time in milliseconds (microsecond resolution).
@@ -263,6 +264,7 @@ private:
     std::shared_ptr<TestStreamDelegate> delegate_;
     rclcpp::TimerBase::SharedPtr clock_sync_timer_;
     rclcpp::TimerBase::SharedPtr latency_report_timer_;
+    rclcpp::Service<insta360_ros_driver::srv::ClockSync>::SharedPtr clock_sync_service_;
 
     // Live-stream resolutions that can be selected with the `video_resolution` parameter.
     // Not every model/firmware accepts every entry; StartLiveStreaming() fails if it does not.
@@ -462,32 +464,71 @@ private:
         return node_->get_parameter(name).get_value<T>();
     }
 
+    struct ClockSample {
+        double rtt_ms = 0.0;
+        double offset_ms = 0.0;  // host_ms - camera_media_ms
+        int64_t camera_ms = 0;
+    };
+
     // NTP-style offset estimate: query the camera's media clock several times and
     // keep the sample with the smallest round trip, whose midpoint is the most
     // accurate estimate of when the camera read its clock.
-    void syncClock() {
-        double best_rtt = std::numeric_limits<double>::infinity();
-        double best_offset = 0.0;
-        int64_t best_cam = 0;
+    // `now_ns` returns the host clock to compare against, in nanoseconds.
+    // Returns false if the camera returned no valid media time.
+    template <typename NowNs>
+    bool sampleCameraClock(NowNs now_ns, ClockSample& out) {
+        int64_t best_rtt_ns = std::numeric_limits<int64_t>::max();
         for (int i = 0; i < clock_sync_samples_; ++i) {
-            const double t0 = steadyNowMs();
+            const int64_t t0 = now_ns();
             const int64_t cam_ms = cam->GetCameraMediaTime();
-            const double t1 = steadyNowMs();
+            const int64_t t1 = now_ns();
             if (cam_ms <= 0) continue;
-            const double rtt = t1 - t0;
-            if (rtt < best_rtt) {
-                best_rtt = rtt;
-                best_offset = (t0 + t1) / 2.0 - static_cast<double>(cam_ms);
-                best_cam = cam_ms;
+            const int64_t rtt_ns = t1 - t0;
+            if (rtt_ns < best_rtt_ns) {
+                best_rtt_ns = rtt_ns;
+                out.rtt_ms = static_cast<double>(rtt_ns) / 1e6;
+                out.offset_ms = static_cast<double>(t0 + rtt_ns / 2 - cam_ms * 1000000) / 1e6;
+                out.camera_ms = cam_ms;
             }
         }
-        if (!std::isfinite(best_rtt)) {
+        return best_rtt_ns != std::numeric_limits<int64_t>::max();
+    }
+
+    // Offset of the host monotonic clock (steadyNowMs) to the camera media clock, used for latency measurement.
+    void syncClock() {
+        ClockSample s;
+        const bool ok = sampleCameraClock([] {
+            using namespace std::chrono;
+            return static_cast<int64_t>(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
+        }, s);
+        if (!ok) {
             RCLCPP_WARN(node_->get_logger(), "[latency] clock sync failed: GetCameraMediaTime() returned no valid samples");
             return;
         }
-        latency_->setClockOffset(best_offset, best_rtt);
+        latency_->setClockOffset(s.offset_ms, s.rtt_ms);
         RCLCPP_DEBUG(node_->get_logger(), "[latency] clock sync: camera media time=%ld ms, offset=%.3f ms, rtt=%.3f ms",
-                     static_cast<long>(best_cam), best_offset, best_rtt);
+                     static_cast<long>(s.camera_ms), s.offset_ms, s.rtt_ms);
+    }
+
+    // Service: same estimate as syncClock(), but against the node's ROS clock (get_clock()->now()).
+    void handleClockSync(const std::shared_ptr<insta360_ros_driver::srv::ClockSync::Request>,
+                         std::shared_ptr<insta360_ros_driver::srv::ClockSync::Response> res) {
+        ClockSample s;
+        const bool ok = sampleCameraClock([this] {
+            return static_cast<int64_t>(node_->get_clock()->now().nanoseconds());
+        }, s);
+        res->success = ok;
+        if (!ok) {
+            res->message = "GetCameraMediaTime() returned no valid samples";
+            RCLCPP_WARN(node_->get_logger(), "clock sync service: %s", res->message.c_str());
+            return;
+        }
+        res->rtt_ms = s.rtt_ms;
+        res->camera_time_ms = s.camera_ms;
+        res->offset_ms = s.offset_ms;
+        res->message = "ok";
+        RCLCPP_DEBUG(node_->get_logger(), "clock sync service: camera media time=%ld ms, offset=%.3f ms, rtt=%.3f ms",
+                     static_cast<long>(s.camera_ms), s.offset_ms, s.rtt_ms);
     }
 
 public:
@@ -605,6 +646,14 @@ public:
         }
         
         RCLCPP_INFO(node_->get_logger(), "Live streaming started.");
+
+        // Offered only once streaming runs, since media time may not advance before that.
+        const std::string clock_sync_service_name = declareParam<std::string>("clock_sync_service", "/insta360/clock_sync");
+        clock_sync_service_ = node_->create_service<insta360_ros_driver::srv::ClockSync>(
+            clock_sync_service_name,
+            [this](const std::shared_ptr<insta360_ros_driver::srv::ClockSync::Request> req,
+                   std::shared_ptr<insta360_ros_driver::srv::ClockSync::Response> res) { handleClockSync(req, res); });
+        RCLCPP_INFO(node_->get_logger(), "Clock sync service: %s", clock_sync_service_name.c_str());
 
         if (measure_latency_) {
             // Media time may only advance once streaming is running, so sync after start.

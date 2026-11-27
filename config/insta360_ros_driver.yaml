@@ -4,6 +4,7 @@ insta360_ros_driver:
     imu_topic: imu/data_raw
     exposure_data_topic: /camera/exposure_data
     camera_preview_info_topic: /insta360/camera_preview_info
+    clock_sync_service: /insta360/clock_sync   # service returning rtt, camera time and ROS-clock offset
     # Live stream format
     # 3840x1920p30 | 2560x1280p30 | 2304x1152p30 | 1920x960p30 | 1440x720p30 | 960x480p30 | 3840x1920p60 | 2560x1280p60
     # (not every model/firmware accepts every entry; the driver exits if StartLiveStreaming fails)

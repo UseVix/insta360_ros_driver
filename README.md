@@ -99,6 +99,27 @@ Connects directly to the Insta360 camera hardware over USB, synchronizes system 
 | `/camera/exposure_data` | `exposure_data_topic` | `insta360_ros_driver/msg/ExposureData` | Camera exposure time and timestamp metadata |
 | `/insta360/camera_preview_info` | `camera_preview_info_topic` | `insta360_ros_driver/msg/CameraPreviewInfo` | Latched camera preview parameters, crop offsets, sweep time, and calibration info |
 
+#### Services
+| Service Name (Default) | Parameter | Type | Description |
+| :--- | :--- | :--- | :--- |
+| `/insta360/clock_sync` | `clock_sync_service` | `insta360_ros_driver/srv/ClockSync` | Estimates the offset between the node's ROS clock (`get_clock()->now()`) and the camera's media clock. Available once live streaming has started |
+
+On each request the driver queries `GetCameraMediaTime()` `clock_sync_samples` times and uses the query with the smallest round trip (the same method as the latency measurement's clock sync, which uses the host monotonic clock instead of the ROS clock). The response contains:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `success` | `bool` | `false` if the camera returned no valid media time |
+| `message` | `string` | `ok`, or the reason for the failure |
+| `rtt_ms` | `float64` | Round trip of the selected query (ms) |
+| `camera_time_ms` | `int64` | Camera media time returned by the selected query (ms) |
+| `offset_ms` | `float64` | ROS clock at the midpoint of the selected query minus `camera_time_ms` (ms) |
+
+A camera timestamp converts to ROS time as `camera_ms + offset_ms`. The estimate is accurate to about ±`rtt_ms`/2.
+
+```bash
+ros2 service call /insta360/clock_sync insta360_ros_driver/srv/ClockSync
+```
+
 #### CLI Usage
 ```bash
 ros2 run insta360_ros_driver insta360_ros_driver --ros-args \
@@ -134,7 +155,7 @@ Set `measure_latency:=true` to log statistics on the path from the camera to the
 | `measure_latency` | `false` | Enable latency instrumentation |
 | `latency_report_period_s` | `5.0` | Interval between statistics reports |
 | `clock_sync_period_s` | `10.0` | Interval between camera/host clock offset re-estimations |
-| `clock_sync_samples` | `30` | `GetCameraMediaTime()` queries per sync (sample with the smallest round trip wins) |
+| `clock_sync_samples` | `30` | `GetCameraMediaTime()` queries per sync (sample with the smallest round trip wins). Also used by the `clock_sync` service |
 
 Each report gives min/mean/p50/p99/max for:
 - **cam->callback**: absolute latency, using the estimated clock offset. Its uncertainty is about ±(sync RTT/2 + 1 ms). It also depends on which moment the camera's timestamp marks (exposure or encode), so check it with an optical test.
@@ -338,6 +359,7 @@ Performs real-time hardware-accelerated stitching of dual-fisheye video packets 
 | `enable_direction_lock` | `bool` | `false` | Locks panorama orientation along the forward heading direction |
 | `enable_deflicker` | `bool` | `false` | Suppresses exposure flicker between frames |
 | `enable_defringe` | `bool` | `false` | Corrects chromatic lens fringing artifacts |
+| `disable_stabilization` | `bool` | `true` | Patches libMediaSDK so that no stabilization rotation is applied to the output: the panorama stays fixed to the camera. `orientation_topic` still publishes the stabilizer quaternion (camera attitude). If the patch cannot be installed (e.g. a different SDK build), an error is logged and the output stays stabilized. Keep `enable_flowstate` `true`, since libMediaSDK crashes without the stabilizer |
 
 #### CLI Usage
 ```bash
@@ -547,12 +569,14 @@ All nodes in `bringup.launch.xml` consistently load parameters from `.yaml` file
 | `ffmpeg_decoder_config` | `config/ffmpeg_decoder.yaml` | Path to YAML config for `ffmpeg_decoder` |
 | `dual_fisheye2equirectangular` | `false` | CPU/OpenCV remap stitcher (`dual_fisheye2equirectangular_cpp`) |
 | `dual_fisheye2equirectangular_config` | `config/dual_fisheye2equirectangular.yaml` | Path to YAML config for OpenCV stitcher |
-| `dual_fisheye2perspective` | `true` | Perspective view from dual-fisheye frames |
+| `dual_fisheye2perspective` | `false` | Perspective view from dual-fisheye frames |
 | `dual_fisheye2perspective_config` | `config/dual_fisheye2perspective.yaml` | Path to YAML config for `dual_fisheye2perspective` |
-| `equirectangular2perspective` | `false` | Perspective view from equirectangular frames |
+| `equirectangular2perspective` | `true` | Perspective view from equirectangular frames |
 | `equirectangular2perspective_config` | `config/equirectangular2perspective.yaml` | Path to YAML config for `equirectangular2perspective` |
 | `imu_filter` | `true` | Madgwick IMU orientation filter (`imu_filter_madgwick`) |
 | `imu_config` | `config/imu_filter.yaml` | Path to YAML config for IMU filter |
+| `decouple_flowstate` | `true` | Republishes the stitcher's `/equirectangular/flowstate_orientation` as `/camera_orientation/quaternion`, so the perspective nodes follow the orientation FlowState used and the view is decoupled from the stabilization rotation |
+| `display_flowstate_orientation` | `true` | Republishes `/equirectangular/flowstate_orientation` as a `geometry_msgs/msg/PoseStamped` on `/pose_out` and publishes a static identity `map` -> `camera_frame` TF, so the orientation can be viewed in RViz2 |
 
 > [!NOTE]
 > **Camera Driver Mode vs. Webcam Mode:**
